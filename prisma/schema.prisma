@@ -1,0 +1,116 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model School {
+  id        String   @id @default(cuid())
+  zoneId    String
+  schoolId  String
+  address   String?
+  contactNumber String?
+  email     String?
+  data      String   // JSON data for additional fields
+  ts        DateTime @default(now())
+  
+  @@map("schools")
+}
+
+model Player {
+  id        String   @id @default(cuid())
+  zoneId    String
+  schoolId  String
+  name      String
+  surname   String
+  idNumber  String?
+  dateOfBirth String?
+  gender    String?
+  ageGroup  String?
+  contactNumber String?
+  email     String?
+  parentContact String?
+  parentEmail String?
+  data      String   // JSON data for additional fields
+  ts        DateTime @default(now())
+  
+  @@map("players")
+}
+
+model Coach {
+  id        String   @id @default(cuid())
+  zoneId    String
+  schoolId  String
+  name      String
+  surname   String
+  idNumber  String?
+  contactNumber String?
+  email     String?
+  qualifications String?
+  experience String?
+  data      String   // JSON data for additional fields
+  ts        DateTime @default(now())
+  
+  @@map("coaches")
+}
+
+model Referee {
+  id        String   @id @default(cuid())
+  name      String
+  surname   String
+  idNumber  String?
+  contactNumber String?
+  email     String?
+  qualifications String?
+  experience String?
+  data      String   // JSON data for additional fields
+  ts        DateTime @default(now())
+  
+  @@map("referees")
+}
+
+model Admin {
+  id        String   @id @default(cuid())
+  name      String
+  surname   String
+  idNumber  String?
+  contactNumber String?
+  email     String?
+  role      String?
+  zoneId    String?
+  schoolId  String?
+  data      String   // JSON data for additional fields
+  ts        DateTime @default(now())
+  
+  @@map("admins")
+}
+
+model Audit {
+  id        String   @id @default(cuid())
+  userRole  String
+  entity    String
+  action    String
+  before    String?  // JSON data
+  after     String?  // JSON data
+  ts        DateTime @default(now())
+  
+  @@map("audits")
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  ownerType String
+  ownerId   String
+  fileName  String
+  fileUrl   String
+  status    String   @default("pending")
+  ts        DateTime @default(now())
+  
+  @@map("documents")
+}

@@ -1,0 +1,279 @@
+import Database from 'sqlite3'
+import path from 'path'
+import fs from 'fs'
+import crypto from 'crypto'
+
+const dbPath = path.join(process.cwd(), 'server', 'data', 'database.sqlite')
+
+// Ensure directory exists
+const dbDir = path.dirname(dbPath)
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true })
+}
+
+const db = new Database.Database(dbPath)
+
+function parseSchoolsFromMd(md) {
+  const lines = String(md || '').split(/\r?\n/)
+  const schools = []
+  let zoneId = 0
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]
+    const m = l.match(/<summary><strong>Zone\s*(\d+):\s*([^<]+)\s*\(/)
+    if (m) {
+      zoneId = parseInt(m[1], 10)
+      const zoneName = m[2].trim()
+      let j = i + 1
+      while (j < lines.length && !lines[j].includes('</details>')) {
+        const sm = lines[j].match(/^\s*\d+\.\s*(.+?)\s*$/)
+        if (sm) {
+          const schoolName = sm[1].trim()
+          const slug = `${zoneName.toLowerCase().replace(/\s+/g, '-')}-${schoolName.toLowerCase().replace(/\s+/g, '-')}`
+          schools.push({ id: slug, zoneId: String(zoneId), schoolId: slug, name: schoolName, zoneName, quintileCategory: 'Q1-3' })
+        }
+        j++
+      }
+      i = j
+    }
+    if (l.includes('Quintile 4 & 5 Schools')) {
+      let j = i
+      while (j < lines.length && !lines[j].includes('## Competition Structure')) {
+        const fm = lines[j].match(/^\s*-\s*(.+)$/)
+        if (fm) {
+          const schoolName = fm[1].trim()
+          const slug = `festival-${schoolName.toLowerCase().replace(/\s+/g, '-')}`
+          schools.push({ id: slug, zoneId: '0', schoolId: slug, name: schoolName, zoneName: 'Festival', quintileCategory: 'Q4-5 festival' })
+        }
+        j++
+      }
+      i = j
+    }
+  }
+  return schools
+}
+
+// Initialize database schema
+db.serialize(() => {
+  // Schools table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS schools (
+      id TEXT PRIMARY KEY,
+      zoneId TEXT NOT NULL,
+      schoolId TEXT NOT NULL,
+      address TEXT,
+      contactNumber TEXT,
+      email TEXT,
+      data TEXT,
+      ts INTEGER
+    )
+  `)
+
+  try {
+    db.all('SELECT schoolId, COUNT(1) as c FROM schools GROUP BY schoolId HAVING COUNT(1) > 1', [], (_derr, drows) => {
+      const list = Array.isArray(drows) ? drows : []
+      let i = 0
+      const next = () => {
+        const item = list[i++]
+        if (!item) {
+          try { db.run('CREATE UNIQUE INDEX IF NOT EXISTS ux_schools_schoolId ON schools(schoolId)') } catch {}
+          return
+        }
+        const sid = String(item.schoolId || '')
+        if (!sid) return next()
+        db.all('SELECT id, ts FROM schools WHERE schoolId = ? ORDER BY ts DESC', [sid], (_err2, rows2) => {
+          const rows = Array.isArray(rows2) ? rows2 : []
+          const keep = rows[0]?.id
+          if (!keep) return next()
+          db.run('DELETE FROM schools WHERE schoolId = ? AND id <> ?', [sid, keep], () => next())
+        })
+      }
+      next()
+    })
+  } catch {
+    try { db.run('CREATE UNIQUE INDEX IF NOT EXISTS ux_schools_schoolId ON schools(schoolId)') } catch {}
+  }
+
+  try {
+    const mdPath = path.join(process.cwd(), 'ep_schools_rugby_zones.md')
+    if (fs.existsSync(mdPath)) {
+      const md = fs.readFileSync(mdPath, 'utf8')
+      const list = parseSchoolsFromMd(md)
+      const ts = Date.now()
+      const stmt = db.prepare('INSERT OR IGNORE INTO schools (id, zoneId, schoolId, address, contactNumber, email, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      for (const s of list) {
+        const data = JSON.stringify({ name: s.name, zoneName: s.zoneName, quintileCategory: s.quintileCategory, seeded: true, seedId: crypto.randomUUID() })
+        stmt.run([s.id, s.zoneId, s.schoolId, null, null, null, data, ts])
+      }
+      stmt.finalize()
+    }
+  } catch {}
+  
+  // Players table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS players (
+      id TEXT PRIMARY KEY,
+      zoneId TEXT NOT NULL,
+      schoolId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      surname TEXT NOT NULL,
+      idNumber TEXT,
+      dateOfBirth TEXT,
+      gender TEXT,
+      ageGroup TEXT,
+      contactNumber TEXT,
+      email TEXT,
+      parentContact TEXT,
+      parentEmail TEXT,
+      data TEXT,
+      ts INTEGER
+    )
+  `)
+
+  // Player migrations table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS migrations (
+      id TEXT PRIMARY KEY,
+      playerId TEXT NOT NULL,
+      fromZoneId TEXT,
+      fromSchoolId TEXT,
+      toZoneId TEXT NOT NULL,
+      toSchoolId TEXT NOT NULL,
+      migrationDate INTEGER NOT NULL,
+      data TEXT,
+      FOREIGN KEY (playerId) REFERENCES players(id) ON DELETE CASCADE
+    )
+  `)
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS migration_requests (
+      id TEXT PRIMARY KEY,
+      playerId TEXT NOT NULL,
+      fromZoneId TEXT,
+      fromSchoolId TEXT,
+      toZoneId TEXT NOT NULL,
+      toSchoolId TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      reason TEXT,
+      requesterRole TEXT,
+      requesterEmail TEXT,
+      requestedAt INTEGER NOT NULL,
+      deciderRole TEXT,
+      deciderEmail TEXT,
+      decidedAt INTEGER,
+      decisionReason TEXT,
+      data TEXT,
+      FOREIGN KEY (playerId) REFERENCES players(id) ON DELETE CASCADE
+    )
+  `)
+
+  try { db.run('CREATE INDEX IF NOT EXISTS ix_migration_requests_status ON migration_requests(status)') } catch {}
+  try { db.run('CREATE INDEX IF NOT EXISTS ix_migration_requests_toSchoolId_status ON migration_requests(toSchoolId, status)') } catch {}
+  try { db.run('CREATE INDEX IF NOT EXISTS ix_migration_requests_playerId ON migration_requests(playerId)') } catch {}
+  
+  // Coaches table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS coaches (
+      id TEXT PRIMARY KEY,
+      zoneId TEXT NOT NULL,
+      schoolId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      surname TEXT NOT NULL,
+      idNumber TEXT,
+      contactNumber TEXT,
+      email TEXT,
+      qualifications TEXT,
+      experience TEXT,
+      data TEXT,
+      ts INTEGER
+    )
+  `)
+  
+  // Referees table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS referees (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      surname TEXT NOT NULL,
+      idNumber TEXT,
+      contactNumber TEXT,
+      email TEXT,
+      qualifications TEXT,
+      experience TEXT,
+      data TEXT,
+      ts INTEGER,
+      zoneId TEXT
+    )
+  `)
+  try { db.run('ALTER TABLE referees ADD COLUMN zoneId TEXT', () => {}) } catch {}
+  
+  // Admins table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS admins (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      surname TEXT NOT NULL,
+      idNumber TEXT,
+      contactNumber TEXT,
+      email TEXT,
+      role TEXT,
+      zoneId TEXT,
+      schoolId TEXT,
+      data TEXT,
+      ts INTEGER
+    )
+  `)
+  
+  // Audits table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS audits (
+      id TEXT PRIMARY KEY,
+      userRole TEXT NOT NULL,
+      entity TEXT NOT NULL,
+      action TEXT NOT NULL,
+      before TEXT,
+      after TEXT,
+      ts INTEGER
+    )
+  `)
+  
+  // Documents table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS documents (
+      id TEXT PRIMARY KEY,
+      ownerType TEXT NOT NULL,
+      ownerId TEXT NOT NULL,
+      fileName TEXT NOT NULL,
+      fileUrl TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      ts INTEGER
+    )
+  `)
+  
+  // Approvals table for player/coach profile updates
+  db.run(`
+    CREATE TABLE IF NOT EXISTS approvals (
+      id TEXT PRIMARY KEY,
+      entityType TEXT NOT NULL, -- 'players' or 'coaches'
+      entityId TEXT NOT NULL,
+      requesterId TEXT NOT NULL,
+      approverId TEXT,
+      status TEXT DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
+      requestedChanges TEXT,
+      approverNotes TEXT,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER,
+      FOREIGN KEY (entityId) REFERENCES players(id) ON DELETE CASCADE,
+      FOREIGN KEY (entityId) REFERENCES coaches(id) ON DELETE CASCADE
+    )
+  `)
+  
+  // Create indexes for performance
+  db.run(`CREATE INDEX IF NOT EXISTS idx_approvals_entity ON approvals(entityType, entityId)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_migrations_player ON migrations(playerId, migrationDate)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_players_idNumber ON players(idNumber)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_players_email ON players(email)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_approvals_school ON approvals(entityId) WHERE entityType = 'players'`)
+})
+
+export default db

@@ -1,0 +1,42 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img "EPRU" [ref=e6]
+      - generic [ref=e7]:
+        - generic [ref=e8]: EPHSRU Rugby Portal
+        - generic [ref=e9]: Eastern Cape Schools Rugby Registration 2025
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - heading "Sign In" [level=1] [ref=e13]
+        - generic [ref=e15]:
+          - generic [ref=e16]:
+            - text: Email
+            - textbox "Email" [ref=e17]
+          - generic [ref=e18]:
+            - text: Password
+            - textbox "Password" [ref=e19]
+          - button "Sign In" [ref=e20] [cursor=pointer]
+          - button "Forgot password?" [ref=e22] [cursor=pointer]
+      - generic [ref=e23]:
+        - heading "Register" [level=1] [ref=e24]
+        - generic [ref=e27]:
+          - generic [ref=e28]:
+            - text: Email
+            - textbox "Email" [ref=e29]: coach.1764036444570@example.com
+          - generic [ref=e30]:
+            - text: Create Password
+            - textbox "Create Password" [ref=e31]: C12345678
+          - generic [ref=e32]:
+            - text: Verify Password
+            - textbox "Verify Password" [active] [ref=e33]: C12345678
+          - generic [ref=e34]:
+            - text: Select registration form
+            - combobox "Select registration form" [ref=e35]:
+              - option "Player Registration" [selected]
+          - button "Continue" [ref=e37] [cursor=pointer]
+  - contentinfo [ref=e38]: © 2025 EPHSRU
+```

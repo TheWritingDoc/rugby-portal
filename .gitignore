@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.vercel/
+.vscode/
+test-results/
+server/uploads/
+*.log
+*.tmp
+.DS_Store

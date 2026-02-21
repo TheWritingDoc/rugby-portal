@@ -1,0 +1,35 @@
+Credentials after login: {
+  schoolId: 'uitenhage-gammel-street',
+  zoneId: '1',
+  email: 'coachplayer.1767727284812@example.com',
+  role: 'Coach'
+}
+LocalStorage after coach login: {
+  schoolId: 'uitenhage-gammel-street',
+  zoneId: '1',
+  email: 'coachplayer.1767727284812@example.com',
+  role: 'Coach'
+}
+Debug info: {
+  totalPlayers: 716,
+  foundPlayer: true,
+  playerData: {
+    id: '46972ab7-8f27-4154-9b0e-0368019b2bcf',
+    zoneId: '1',
+    schoolId: 'uitenhage-gammel-street',
+    name: 'Test1767727284812',
+    surname: 'Spec1767727284812',
+    idNumber: null,
+    dateOfBirth: null,
+    gender: 'Male',
+    ageGroup: 'U19',
+    contactNumber: null,
+    email: 'coachplayer.1767727284812@example.com',
+    parentContact: null,
+    parentEmail: null,
+    data: '{"name":"Test1767727284812","surname":"Spec1767727284812","idNumber":"","dob":"2008-01-02","gender":"Male","phone":"0821234567","email":"coachplayer.1767727284812@example.com","zoneId":"1","schoolId":"uitenhage-gammel-street","ageGroup":"U19","photoUrl":"","address":"","emergencyContactName":"","emergencyContactNumber":"","parentName":"","parentSurname":"","relationship":"","parentContact":"","parentEmail":"","consentSignature":"","position":"","jerseyNumber":"","previousSchool":"","medicalAidName":"","medicalAidNumber":"","allergies":"","chronicConditions":"","medicalNotes":"","passwordHash":"$2b$10$YY4uS9a3kibnIfQWqOivQO75L8o7S/IjOXEpxjgw48csIF0zo12j."}',
+    ts: 1767727285355
+  },
+  coachSchoolId: 'uitenhage-gammel-street',
+  coachZoneId: '1'
+}

@@ -1,0 +1,386 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img "EPRU" [ref=e6]
+      - generic [ref=e7]:
+        - generic [ref=e8]: EPHSRU Rugby Portal
+        - generic [ref=e9]: Eastern Cape Schools Rugby Registration 2025
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - text: Signed in as
+        - combobox "Signed in as" [ref=e13]:
+          - option "Player"
+          - option "Referee"
+          - option "Coach" [selected]
+          - option "SchoolAdmin"
+          - option "ZoneCoordinator"
+          - option "EPHSRUAdmin"
+      - button "Home" [ref=e14] [cursor=pointer]
+      - button "Dashboard" [ref=e15] [cursor=pointer]
+      - button "Login" [ref=e16] [cursor=pointer]
+    - generic [ref=e17]:
+      - heading "Role Dashboard" [level=1] [ref=e18]
+      - generic [ref=e20]:
+        - heading "Dashboard" [level=1] [ref=e21]
+        - generic [ref=e23]:
+          - generic [ref=e24]:
+            - generic [ref=e25]:
+              - generic [ref=e26]: T
+              - generic [ref=e27]:
+                - generic [ref=e28]: Test1767671681305 Spec1767671681305
+                - generic [ref=e29]: uitenhage-gammel-street
+            - button "Back" [ref=e30] [cursor=pointer]
+          - generic [ref=e31]:
+            - group "Personal Information" [ref=e32]:
+              - generic [ref=e33]: Personal Information
+              - generic [ref=e34]:
+                - generic [ref=e35]:
+                  - generic [ref=e36]:
+                    - text: Name
+                    - textbox "Name" [ref=e37]: UpdatedName 1767671681305
+                  - button "Save" [ref=e39] [cursor=pointer]
+                - generic [ref=e40]:
+                  - generic [ref=e41]:
+                    - text: Surname
+                    - textbox "Surname" [active] [ref=e42]: Spec1767671681305
+                  - button "Save" [ref=e44] [cursor=pointer]
+                - generic [ref=e45]:
+                  - generic [ref=e46]: Missing
+                  - generic [ref=e47]:
+                    - text: ID/Passport
+                    - textbox "ID/Passport" [ref=e48]
+                  - button "Save" [ref=e50] [cursor=pointer]
+                - generic [ref=e51]:
+                  - generic [ref=e52]:
+                    - text: Date of Birth
+                    - textbox "Date of Birth" [ref=e53]: 2008-01-02
+                  - button "Save" [ref=e55] [cursor=pointer]
+                - generic [ref=e56]:
+                  - generic [ref=e57]:
+                    - text: Gender
+                    - combobox "Gender" [ref=e58]:
+                      - option "Select..."
+                      - option "Male" [selected]
+                      - option "Female"
+                  - button "Save" [ref=e60] [cursor=pointer]
+                - generic [ref=e61]:
+                  - generic [ref=e62]:
+                    - text: Age Group
+                    - combobox "Age Group" [ref=e63]:
+                      - option "U15"
+                      - option "U16"
+                      - option "U19" [selected]
+                      - option "U17 Sevens"
+                      - option "Girls U16"
+                      - option "Girls U18"
+                  - button "Save" [ref=e65] [cursor=pointer]
+                - generic [ref=e66]:
+                  - generic [ref=e67]: Missing
+                  - generic [ref=e68]:
+                    - text: Mobile
+                    - textbox "Mobile" [ref=e69]
+                  - button "Save" [ref=e71] [cursor=pointer]
+                - generic [ref=e72]:
+                  - generic [ref=e73]:
+                    - text: Email
+                    - textbox "Email" [ref=e74]: coachplayer.1767671681305@example.com
+                  - button "Save" [ref=e76] [cursor=pointer]
+                - generic [ref=e77]:
+                  - generic [ref=e78]: Missing
+                  - generic [ref=e79]:
+                    - text: Address
+                    - textbox "Address" [ref=e80]
+                  - button "Save" [ref=e82] [cursor=pointer]
+                - generic [ref=e83]:
+                  - generic [ref=e84]: Missing
+                  - generic [ref=e85]:
+                    - text: Emergency Contact Name
+                    - textbox "Emergency Contact Name" [ref=e86]
+                  - button "Save" [ref=e88] [cursor=pointer]
+                - generic [ref=e89]:
+                  - generic [ref=e90]: Missing
+                  - generic [ref=e91]:
+                    - text: Emergency Contact Number
+                    - textbox "Emergency Contact Number" [ref=e92]
+                  - button "Save" [ref=e94] [cursor=pointer]
+            - group "Parent/Guardian Information" [ref=e95]:
+              - generic [ref=e96]: Parent/Guardian Information
+              - generic [ref=e97]:
+                - generic [ref=e98]:
+                  - generic [ref=e99]: Missing
+                  - generic [ref=e100]:
+                    - text: Parent/Guardian Name
+                    - textbox "Parent/Guardian Name" [ref=e101]
+                  - button "Save" [ref=e103] [cursor=pointer]
+                - generic [ref=e104]:
+                  - generic [ref=e105]: Missing
+                  - generic [ref=e106]:
+                    - text: Parent/Guardian Surname
+                    - textbox "Parent/Guardian Surname" [ref=e107]
+                  - button "Save" [ref=e109] [cursor=pointer]
+                - generic [ref=e110]:
+                  - generic [ref=e111]: Missing
+                  - generic [ref=e112]:
+                    - text: Relationship to Player
+                    - combobox "Relationship to Player" [ref=e113]:
+                      - option "Parent" [selected]
+                      - option "Guardian"
+                      - option "Relative"
+                      - option "Other"
+                  - button "Save" [ref=e115] [cursor=pointer]
+                - generic [ref=e116]:
+                  - generic [ref=e117]: Missing
+                  - generic [ref=e118]:
+                    - text: Parent Contact Number
+                    - textbox "Parent Contact Number" [ref=e119]
+                  - button "Save" [ref=e121] [cursor=pointer]
+                - generic [ref=e122]:
+                  - generic [ref=e123]: Missing
+                  - generic [ref=e124]:
+                    - text: Parent Email
+                    - textbox "Parent Email" [ref=e125]
+                  - button "Save" [ref=e127] [cursor=pointer]
+                - generic [ref=e128]:
+                  - generic [ref=e129]: Missing
+                  - generic [ref=e130]:
+                    - text: Digital Consent Signature
+                    - textbox "Digital Consent Signature" [ref=e131]
+                  - button "Save" [ref=e133] [cursor=pointer]
+            - group "Rugby Information" [ref=e134]:
+              - generic [ref=e135]: Rugby Information
+              - generic [ref=e136]:
+                - generic [ref=e137]:
+                  - generic [ref=e138]: Missing
+                  - generic [ref=e139]:
+                    - text: Position(s) Played
+                    - combobox "Position(s) Played" [ref=e140]:
+                      - option "Prop" [selected]
+                      - option "Hooker"
+                      - option "Lock"
+                      - option "Flanker"
+                      - option "Number 8"
+                      - option "Scrum-half"
+                      - option "Fly-half"
+                      - option "Centre"
+                      - option "Wing"
+                      - option "Fullback"
+                  - button "Save" [ref=e142] [cursor=pointer]
+                - generic [ref=e143]:
+                  - generic [ref=e144]: Missing
+                  - generic [ref=e145]:
+                    - text: Jersey Number
+                    - spinbutton "Jersey Number" [ref=e146]
+                  - button "Save" [ref=e148] [cursor=pointer]
+                - generic [ref=e149]:
+                  - generic [ref=e150]: Missing
+                  - generic [ref=e151]:
+                    - text: Team
+                    - combobox "Team" [ref=e152]:
+                      - option "Select..." [selected]
+                      - option "U15"
+                      - option "U16"
+                      - option "U19"
+                      - option "U17 Sevens"
+                      - option "Girls U16"
+                      - option "Girls U18"
+                  - button "Save" [ref=e154] [cursor=pointer]
+                - generic [ref=e155]:
+                  - generic [ref=e156]: Missing
+                  - generic [ref=e157]:
+                    - generic [ref=e158]: Previous School
+                    - generic [ref=e159]:
+                      - text: Zone
+                      - combobox "Zone" [ref=e160]:
+                        - option "Select..." [selected]
+                        - option "Uitenhage"
+                        - option "Kwadwezi"
+                        - option "Zwide"
+                        - option "Kwazakhele"
+                        - option "New Brighton"
+                        - option "Swartkops"
+                        - option "Motherwell"
+                        - option "Albany"
+                        - option "Karoo"
+                        - option "Midlands"
+                        - option "Northern Areas"
+                        - option "Kouga"
+                    - generic [ref=e161]:
+                      - text: School
+                      - combobox "School" [ref=e162]:
+                        - option "Select..." [selected]
+                        - option "Gammel Street"
+                        - option "McCarthy"
+                        - option "Uitenhage"
+                        - option "John Walton"
+                        - option "Molly Blackburn"
+                        - option "Solomon Mahlangu"
+                        - option "Moses Mabida"
+                        - option "Hector Mlungisi"
+                        - option "St Colmcile"
+                        - option "Kirkwood"
+                        - option "Thandooxolo"
+                        - option "Nkululeko"
+                        - option "Tinara"
+                        - option "Kwinina"
+                        - option "Sisonke"
+                        - option "Phampani"
+                        - option "Ez kabane"
+                        - option "Gqebera"
+                        - option "Kwamagxaki"
+                        - option "Lungisa"
+                        - option "Sek Mkayi"
+                        - option "Tyhiluwazi"
+                        - option "Khwezi Lomzo"
+                        - option "Loyiso"
+                        - option "Thembalabantu"
+                        - option "Lwazilwthu"
+                        - option "Pakamisa"
+                        - option "Sakisiswe"
+                        - option "Nzondolelo"
+                        - option "Kwazakhele"
+                        - option "Chubekile"
+                        - option "Qapphelani"
+                        - option "Tamsanqa"
+                        - option "Mzontsundu"
+                        - option "Masibambane"
+                        - option "Ithembilihle"
+                        - option "Cowan"
+                        - option "Newell"
+                        - option "Sophakama"
+                        - option "Lwandlekasi"
+                        - option "Thubelihle"
+                        - option "Vulumzi"
+                        - option "Motherwell"
+                        - option "Ddt Jabavu"
+                        - option "Soqhayisa"
+                        - option "Ndyebo"
+                        - option "Cingani"
+                        - option "Douglas Mpopha"
+                        - option "Mfesane"
+                        - option "Masipatsane"
+                        - option "Ncedo"
+                        - option "James Jalobe"
+                        - option "Coselelan"
+                        - option "Alexandria"
+                        - option "Hendrick Knayisa"
+                        - option "Khayakhulu"
+                        - option "Kutliso Daniels"
+                        - option "Mary Walters"
+                        - option "Nataniel Nyaluza"
+                        - option "Nombulelo"
+                        - option "Ntsika"
+                        - option "Qyayiya"
+                        - option "Sipo Camagu"
+                        - option "Tem Mrwetyyana"
+                        - option "Ukhanyo"
+                        - option "Zanolwazi"
+                        - option "Nomzamo"
+                        - option "Aberdeen Sekonder"
+                        - option "Asherville"
+                        - option "Carel du Toit"
+                        - option "Kliplaat"
+                        - option "Middelburg"
+                        - option "Spandau"
+                        - option "Willowmore"
+                        - option "Aeroville"
+                        - option "Cradock"
+                        - option "Gcinubuzwe"
+                        - option "Johnson Nconqoza"
+                        - option "Lonwaba Bedford"
+                        - option "Matthew Coniwe"
+                        - option "Michausdal"
+                        - option "Msombombuvu Black"
+                        - option "Pearston Sek"
+                        - option "Templeton"
+                        - option "Thubeletha"
+                        - option "Paterson"
+                        - option "David Livingstone"
+                        - option "Woolhope"
+                        - option "Morningside"
+                        - option "St Thomas"
+                        - option "Chapman"
+                        - option "Gelvandale"
+                        - option "Hillside"
+                        - option "Bethelsdorp"
+                        - option "Arcadia"
+                        - option "Sanctor"
+                        - option "Westville"
+                        - option "Chatty"
+                        - option "Bertram"
+                        - option "Booysen Park"
+                        - option "Walmer"
+                        - option "Lawson Brown"
+                        - option "Stedin College"
+                        - option "Bonzai"
+                        - option "Brylin"
+                        - option "Hankey"
+                        - option "Patensie"
+                        - option "Humansdorp"
+                        - option "Kareedouw"
+                        - option "Jeffreys Bay"
+                        - option "Kayalethu"
+                        - option "Louterwater"
+                        - option "Grey / Volkskool"
+                        - option "Marlow / Brandwag"
+                        - option "Framesby / Muir College"
+                        - option "Pearson / Greame College"
+                        - option "Nico Malan / Union High"
+                        - option "Woodridge / Winterberg"
+                        - option "Otto Duplesis / Middelande"
+                        - option "Alexander Road / Gill College"
+                        - option "Westview / Bergsig"
+                        - option "Westring / Victoria Park"
+                        - option "Daniel Pienaar / Despatch"
+                        - option "DF Malherbe / Newton Tech"
+                        - option "Jansenville / Kingswood College"
+                        - option "Linkside / McClachlan"
+                        - option "Pauls Sauer / PJ Olivier"
+                        - option "Port Alfred / St Andrews"
+                        - option "Andrew Rabie"
+                        - option "--"
+                  - button "Save" [ref=e164] [cursor=pointer]
+            - group "Medical Information" [ref=e165]:
+              - generic [ref=e166]: Medical Information
+              - generic [ref=e167]:
+                - generic [ref=e168]:
+                  - generic [ref=e169]: Missing
+                  - generic [ref=e170]:
+                    - text: Medical Aid Name
+                    - textbox "Medical Aid Name" [ref=e171]
+                  - button "Save" [ref=e173] [cursor=pointer]
+                - generic [ref=e174]:
+                  - generic [ref=e175]: Missing
+                  - generic [ref=e176]:
+                    - text: Medical Aid Number
+                    - textbox "Medical Aid Number" [ref=e177]
+                  - button "Save" [ref=e179] [cursor=pointer]
+                - generic [ref=e180]:
+                  - generic [ref=e181]: Missing
+                  - generic [ref=e182]:
+                    - text: Known Allergies
+                    - textbox "Known Allergies" [ref=e183]
+                  - button "Save" [ref=e185] [cursor=pointer]
+                - generic [ref=e186]:
+                  - generic [ref=e187]: Missing
+                  - generic [ref=e188]:
+                    - text: Chronic Conditions
+                    - textbox "Chronic Conditions" [ref=e189]
+                  - button "Save" [ref=e191] [cursor=pointer]
+                - generic [ref=e192]:
+                  - generic [ref=e193]: Missing
+                  - generic [ref=e194]:
+                    - text: Emergency Medical Notes
+                    - textbox "Emergency Medical Notes" [ref=e195]
+                  - button "Save" [ref=e197] [cursor=pointer]
+            - generic [ref=e198]:
+              - button "Close" [ref=e199] [cursor=pointer]
+              - button "Save All Changes" [ref=e200] [cursor=pointer]
+          - generic [ref=e201]:
+            - generic [ref=e202]: Pending Changes
+            - generic [ref=e203]: No pending changes
+  - contentinfo [ref=e204]: © 2025 EPHSRU
+```

@@ -1,0 +1,190 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - img "EPRU" [ref=e6]
+      - generic [ref=e7]:
+        - generic [ref=e8]: EPHSRU Rugby Portal
+        - generic [ref=e9]: Eastern Cape Schools Rugby Registration 2025
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - text: Signed in as
+        - combobox "Signed in as" [ref=e13]:
+          - option "Player" [selected]
+          - option "Referee"
+          - option "Coach"
+          - option "SchoolAdmin"
+          - option "ZoneCoordinator"
+          - option "EPHSRUAdmin"
+      - button "Home" [ref=e14] [cursor=pointer]
+      - button "Dashboard" [ref=e15] [cursor=pointer]
+      - button "Login" [active] [ref=e16] [cursor=pointer]
+    - generic [ref=e17]:
+      - heading "Sign In" [level=1] [ref=e18]
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - text: Role
+          - combobox "Role" [ref=e22]:
+            - option "Player" [selected]
+            - option "Referee"
+            - option "Coach"
+            - option "SchoolAdmin"
+            - option "ZoneCoordinator"
+            - option "EPHSRUAdmin"
+        - generic [ref=e23]:
+          - generic [ref=e24]:
+            - text: Zone
+            - combobox "Zone" [ref=e25]:
+              - option "Select..." [selected]
+              - option "Uitenhage"
+              - option "Kwadwezi"
+              - option "Zwide"
+              - option "Kwazakhele"
+              - option "New Brighton"
+              - option "Swartkops"
+              - option "Motherwell"
+              - option "Albany"
+              - option "Karoo"
+              - option "Midlands"
+              - option "Northern Areas"
+              - option "Kouga"
+          - generic [ref=e26]:
+            - text: School
+            - combobox "School" [ref=e27]:
+              - option "Select..." [selected]
+              - option "Gammel Street"
+              - option "McCarthy"
+              - option "Uitenhage"
+              - option "John Walton"
+              - option "Molly Blackburn"
+              - option "Solomon Mahlangu"
+              - option "Moses Mabida"
+              - option "Hector Mlungisi"
+              - option "St Colmcile"
+              - option "Kirkwood"
+              - option "Thandooxolo"
+              - option "Nkululeko"
+              - option "Tinara"
+              - option "Kwinina"
+              - option "Sisonke"
+              - option "Phampani"
+              - option "Ez kabane"
+              - option "Gqebera"
+              - option "Kwamagxaki"
+              - option "Lungisa"
+              - option "Sek Mkayi"
+              - option "Tyhiluwazi"
+              - option "Khwezi Lomzo"
+              - option "Loyiso"
+              - option "Thembalabantu"
+              - option "Lwazilwthu"
+              - option "Pakamisa"
+              - option "Sakisiswe"
+              - option "Nzondolelo"
+              - option "Kwazakhele"
+              - option "Chubekile"
+              - option "Qapphelani"
+              - option "Tamsanqa"
+              - option "Mzontsundu"
+              - option "Masibambane"
+              - option "Ithembilihle"
+              - option "Cowan"
+              - option "Newell"
+              - option "Sophakama"
+              - option "Lwandlekasi"
+              - option "Thubelihle"
+              - option "Vulumzi"
+              - option "Motherwell"
+              - option "Ddt Jabavu"
+              - option "Soqhayisa"
+              - option "Ndyebo"
+              - option "Cingani"
+              - option "Douglas Mpopha"
+              - option "Mfesane"
+              - option "Masipatsane"
+              - option "Ncedo"
+              - option "James Jalobe"
+              - option "Coselelan"
+              - option "Alexandria"
+              - option "Hendrick Knayisa"
+              - option "Khayakhulu"
+              - option "Kutliso Daniels"
+              - option "Mary Walters"
+              - option "Nataniel Nyaluza"
+              - option "Nombulelo"
+              - option "Ntsika"
+              - option "Qyayiya"
+              - option "Sipo Camagu"
+              - option "Tem Mrwetyyana"
+              - option "Ukhanyo"
+              - option "Zanolwazi"
+              - option "Nomzamo"
+              - option "Aberdeen Sekonder"
+              - option "Asherville"
+              - option "Carel du Toit"
+              - option "Kliplaat"
+              - option "Middelburg"
+              - option "Spandau"
+              - option "Willowmore"
+              - option "Aeroville"
+              - option "Cradock"
+              - option "Gcinubuzwe"
+              - option "Johnson Nconqoza"
+              - option "Lonwaba Bedford"
+              - option "Matthew Coniwe"
+              - option "Michausdal"
+              - option "Msombombuvu Black"
+              - option "Pearston Sek"
+              - option "Templeton"
+              - option "Thubeletha"
+              - option "Paterson"
+              - option "David Livingstone"
+              - option "Woolhope"
+              - option "Morningside"
+              - option "St Thomas"
+              - option "Chapman"
+              - option "Gelvandale"
+              - option "Hillside"
+              - option "Bethelsdorp"
+              - option "Arcadia"
+              - option "Sanctor"
+              - option "Westville"
+              - option "Chatty"
+              - option "Bertram"
+              - option "Booysen Park"
+              - option "Walmer"
+              - option "Lawson Brown"
+              - option "Stedin College"
+              - option "Bonzai"
+              - option "Brylin"
+              - option "Hankey"
+              - option "Patensie"
+              - option "Humansdorp"
+              - option "Kareedouw"
+              - option "Jeffreys Bay"
+              - option "Kayalethu"
+              - option "Louterwater"
+              - option "Grey / Volkskool"
+              - option "Marlow / Brandwag"
+              - option "Framesby / Muir College"
+              - option "Pearson / Greame College"
+              - option "Nico Malan / Union High"
+              - option "Woodridge / Winterberg"
+              - option "Otto Duplesis / Middelande"
+              - option "Alexander Road / Gill College"
+              - option "Westview / Bergsig"
+              - option "Westring / Victoria Park"
+              - option "Daniel Pienaar / Despatch"
+              - option "DF Malherbe / Newton Tech"
+              - option "Jansenville / Kingswood College"
+              - option "Linkside / McClachlan"
+              - option "Pauls Sauer / PJ Olivier"
+              - option "Port Alfred / St Andrews"
+              - option "Andrew Rabie"
+              - option "--"
+        - button "Sign In" [ref=e28] [cursor=pointer]
+  - contentinfo [ref=e29]: © 2025 EPHSRU
+```

@@ -1,0 +1,1 @@
+[{"name":"Human-like Interaction Issues","messageRegex":".*human.*interaction.*","matchedStatuses":["failed","broken"]},{"name":"Visual Regression Issues","messageRegex":".*visual.*regression.*","matchedStatuses":["failed","broken"]},{"name":"Performance Issues","messageRegex":".*performance.*","matchedStatuses":["failed","broken"]}]

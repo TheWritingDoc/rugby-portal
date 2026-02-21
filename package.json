@@ -1,0 +1,47 @@
+{
+  "name": "ep-schools-rugby-portal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test:e2e": "playwright test",
+    "test:human-like": "playwright test --config=playwright.config.human-like.ts",
+    "test:player-management": "playwright test tests/player-management-human-like.spec.ts --config=playwright.config.human-like.ts",
+    "test:roles": "playwright test tests/roles-hierarchy.spec.ts --config=playwright.config.roles.ts",
+    "test:optimization": "playwright test tests/school-admin-optimization.spec.ts",
+    "test:screenshots": "npx tsx tests/run-optimization.ts",
+    "test:report": "npx allure generate test-results/allure-results -o test-results/allure-report --clean && npx allure open test-results/allure-report",
+    "server": "node server/index-sqlite.js",
+    "server:prod": "NODE_ENV=production node server/index-prod.js",
+    "deploy": "npm run build && npm run test:e2e && npm run server:prod"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "bcryptjs": "^3.0.3",
+    "jsonwebtoken": "^9.0.2",
+    "lucide-react": "^0.554.0",
+    "prisma": "^6.19.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.9.6",
+    "recharts": "^3.6.0",
+    "sqlite3": "^5.1.7",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^9.9.0",
+    "@playwright/test": "^1.47.0",
+    "@types/react": "^18.3.8",
+    "@types/react-dom": "^18.3.2",
+    "@vitejs/plugin-react": "^5.1.1",
+    "allure-playwright": "^3.4.2",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.8"
+  }
+}

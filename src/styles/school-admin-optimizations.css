@@ -1,0 +1,522 @@
+/**
+ * SchoolAdmin Dashboard Optimization - CSS Improvements
+ * 
+ * This file contains the CSS improvements to address the issues identified
+ * by the optimization system analysis.
+ */
+
+/* ==========================================
+   RESPONSIVE DESIGN IMPROVEMENTS
+   ========================================== */
+
+/* Mobile-first responsive breakpoints */
+@media (max-width: 640px) {
+  /* Header card improvements */
+  .school-admin-header {
+    @apply px-4 py-6;
+  }
+  
+  .school-admin-header h1 {
+    @apply text-2xl;
+  }
+  
+  /* Stats cards responsive grid */
+  .stats-grid {
+    @apply grid-cols-1 gap-4;
+  }
+  
+  .stats-card {
+    @apply p-4;
+  }
+  
+  /* Tab navigation improvements */
+  .tab-navigation {
+    @apply flex-wrap gap-1;
+  }
+  
+  .tab-button {
+    @apply px-3 py-2 text-sm;
+  }
+  
+  /* Form improvements */
+  .coach-form-grid,
+  .admin-form-grid {
+    @apply grid-cols-1 gap-4;
+  }
+  
+  /* Player/coach/admin cards */
+  .user-card {
+    @apply p-4;
+  }
+  
+  .user-card-content {
+    @apply flex-col items-start gap-3;
+  }
+  
+  .user-card-actions {
+    @apply w-full justify-end mt-3;
+  }
+  
+  /* Analytics charts */
+  .analytics-grid {
+    @apply grid-cols-1 gap-6;
+  }
+  
+  .progress-bar-container {
+    @apply h-6;
+  }
+}
+
+/* Tablet improvements */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .stats-grid {
+    @apply grid-cols-2 gap-6;
+  }
+  
+  .analytics-grid {
+    @apply grid-cols-2 gap-8;
+  }
+  
+  .form-grid {
+    @apply grid-cols-2 gap-6;
+  }
+  
+  .user-card-grid {
+    @apply grid-cols-2 gap-6;
+  }
+}
+
+/* Desktop improvements */
+@media (min-width: 1025px) {
+  .stats-grid {
+    @apply grid-cols-4 gap-6;
+  }
+  
+  .user-card-grid {
+    @apply grid-cols-4 gap-6;
+  }
+  
+  .analytics-grid {
+    @apply grid-cols-2 gap-8;
+  }
+}
+
+/* ==========================================
+   ACCESSIBILITY IMPROVEMENTS
+   ========================================== */
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .text-gray-500,
+  .text-gray-400 {
+    @apply text-gray-800;
+  }
+  
+  .bg-gray-50 {
+    @apply bg-gray-100;
+  }
+  
+  .border-gray-200 {
+    @apply border-gray-400;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Focus improvements */
+.focus-visible {
+  @apply outline-none ring-2 ring-blue-500 ring-offset-2;
+}
+
+/* Skip link for keyboard navigation */
+.skip-link {
+  @apply absolute left-0 top-0 z-50 bg-blue-600 text-white px-4 py-2 rounded-md;
+  transform: translateY(-100%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+/* ==========================================
+   COLOR CONTRAST IMPROVEMENTS
+   ========================================== */
+
+/* Improved text contrast ratios */
+.text-contrast-high {
+  @apply text-gray-900;
+}
+
+.text-contrast-medium {
+  @apply text-gray-700;
+}
+
+.text-contrast-low {
+  @apply text-gray-600;
+}
+
+/* Improved background contrast */
+.bg-contrast-light {
+  @apply bg-gray-50;
+}
+
+.bg-contrast-medium {
+  @apply bg-gray-100;
+}
+
+/* Status colors with better contrast */
+.status-success {
+  @apply text-green-800 bg-green-50 border-green-200;
+}
+
+.status-warning {
+  @apply text-amber-800 bg-amber-50 border-amber-200;
+}
+
+.status-error {
+  @apply text-red-800 bg-red-50 border-red-200;
+}
+
+.status-info {
+  @apply text-blue-800 bg-blue-50 border-blue-200;
+}
+
+/* ==========================================
+   TYPOGRAPHY CONSISTENCY
+   ========================================== */
+
+/* Unified typography scale */
+.heading-xl {
+  @apply text-3xl font-bold leading-tight text-gray-900;
+}
+
+.heading-lg {
+  @apply text-2xl font-semibold leading-tight text-gray-900;
+}
+
+.heading-md {
+  @apply text-xl font-semibold leading-tight text-gray-900;
+}
+
+.heading-sm {
+  @apply text-lg font-medium leading-tight text-gray-900;
+}
+
+.body-lg {
+  @apply text-base font-normal leading-relaxed text-gray-700;
+}
+
+.body-md {
+  @apply text-sm font-normal leading-relaxed text-gray-600;
+}
+
+.body-sm {
+  @apply text-xs font-normal leading-relaxed text-gray-500;
+}
+
+/* ==========================================
+   SPACING SYSTEM
+   ========================================== */
+
+/* Consistent spacing utilities */
+.spacing-xs {
+  @apply p-2;
+}
+
+.spacing-sm {
+  @apply p-4;
+}
+
+.spacing-md {
+  @apply p-6;
+}
+
+.spacing-lg {
+  @apply p-8;
+}
+
+.spacing-xl {
+  @apply p-10;
+}
+
+/* Margin utilities */
+.margin-xs {
+  @apply m-2;
+}
+
+.margin-sm {
+  @apply m-4;
+}
+
+.margin-md {
+  @apply m-6;
+}
+
+.margin-lg {
+  @apply m-8;
+}
+
+/* ==========================================
+   COMPONENT IMPROVEMENTS
+   ========================================== */
+
+/* Improved card components */
+.card {
+  @apply rounded-xl border bg-white shadow-sm hover:shadow-md transition-shadow;
+}
+
+.card-header {
+  @apply p-6 border-b border-gray-200;
+}
+
+.card-body {
+  @apply p-6;
+}
+
+.card-footer {
+  @apply p-6 border-t border-gray-200;
+}
+
+/* Improved button components */
+.btn {
+  @apply inline-flex items-center justify-center px-4 py-2 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2;
+}
+
+.btn-primary {
+  @apply bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500;
+}
+
+.btn-secondary {
+  @apply bg-gray-100 text-gray-700 hover:bg-gray-200 focus:ring-gray-500;
+}
+
+.btn-success {
+  @apply bg-green-600 text-white hover:bg-green-700 focus:ring-green-500;
+}
+
+.btn-warning {
+  @apply bg-amber-600 text-white hover:bg-amber-700 focus:ring-amber-500;
+}
+
+.btn-danger {
+  @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+}
+
+/* Improved form components */
+.form-group {
+  @apply mb-6;
+}
+
+.form-label {
+  @apply block text-sm font-medium text-gray-700 mb-2;
+}
+
+.form-input {
+  @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500;
+}
+
+.form-select {
+  @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500;
+}
+
+.form-textarea {
+  @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500;
+}
+
+.form-error {
+  @apply text-sm text-red-600 mt-1;
+}
+
+.form-help {
+  @apply text-sm text-gray-500 mt-1;
+}
+
+/* ==========================================
+   LAYOUT GRID SYSTEM
+   ========================================== */
+
+/* Responsive grid system */
+.grid-container {
+  @apply container mx-auto px-4 sm:px-6 lg:px-8;
+}
+
+.grid-cols-responsive {
+  @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6;
+}
+
+.flex-responsive {
+  @apply flex flex-col sm:flex-row items-start sm:items-center gap-4;
+}
+
+/* ==========================================
+   PROGRESS BARS AND CHARTS
+   ========================================== */
+
+.progress-bar {
+  @apply h-8 bg-gray-100 rounded-full overflow-hidden;
+}
+
+.progress-fill {
+  @apply h-full rounded-full transition-all duration-500;
+}
+
+.progress-blue {
+  @apply bg-gradient-to-r from-blue-500 to-blue-400;
+}
+
+.progress-green {
+  @apply bg-green-500;
+}
+
+.progress-amber {
+  @apply bg-amber-500;
+}
+
+.progress-red {
+  @apply bg-red-500;
+}
+
+/* ==========================================
+   ANIMATION AND TRANSITIONS
+   ========================================== */
+
+/* Smooth transitions */
+.transition-smooth {
+  @apply transition-all duration-200 ease-in-out;
+}
+
+.transition-medium {
+  @apply transition-all duration-300 ease-in-out;
+}
+
+.transition-slow {
+  @apply transition-all duration-500 ease-in-out;
+}
+
+/* Hover effects */
+.hover-lift {
+  @apply hover:shadow-lg hover:-translate-y-1 transition-all duration-200;
+}
+
+.hover-glow {
+  @apply hover:shadow-xl hover:shadow-blue-500/20 transition-all duration-200;
+}
+
+/* ==========================================
+   UTILITY CLASSES
+   ========================================== */
+
+/* Screen reader only */
+.sr-only {
+  @apply absolute w-px h-px p-0 -m-px overflow-hidden whitespace-nowrap border-0;
+}
+
+/* Focus trap */
+.focus-trap {
+  @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2;
+}
+
+/* Loading states */
+.loading {
+  @apply animate-pulse;
+}
+
+.loading-skeleton {
+  @apply bg-gray-200 rounded animate-pulse;
+}
+
+/* Disabled states */
+.disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* Print styles */
+@media print {
+  .no-print {
+    @apply hidden;
+  }
+  
+  .print-only {
+    @apply block;
+  }
+}
+
+/* ==========================================
+   CUSTOM PROPERTIES (CSS VARIABLES)
+   ========================================== */
+
+:root {
+  /* Color palette */
+  --color-primary: #2563eb;
+  --color-primary-dark: #1d4ed8;
+  --color-secondary: #7c3aed;
+  --color-success: #059669;
+  --color-warning: #d97706;
+  --color-error: #dc2626;
+  
+  /* Neutral colors */
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+  
+  /* Typography */
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 1.875rem;
+  --font-size-4xl: 2.25rem;
+  
+  /* Spacing */
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --spacing-2xl: 3rem;
+  
+  /* Border radius */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-gray-50: #111827;
+    --color-gray-100: #1f2937;
+    --color-gray-200: #374151;
+    --color-gray-300: #4b5563;
+    --color-gray-400: #6b7280;
+    --color-gray-500: #9ca3af;
+    --color-gray-600: #d1d5db;
+    --color-gray-700: #e5e7eb;
+    --color-gray-800: #f3f4f6;
+    --color-gray-900: #f9fafb;
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "EPHSRU Rugby Portal",
+  "short_name": "EP Rugby",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#e11d48",
+  "icons": [
+    { "src": "/EPRU-LOGO.png", "sizes": "192x192", "type": "image/png" }
+  ]
+}

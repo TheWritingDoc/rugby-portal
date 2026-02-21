@@ -1,0 +1,3610 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ZoneSelect, SchoolSelect } from '../components/Dropdowns'
+import { getEntities, updateEntity, getProposals, addProposal, setProposalStatus, deleteProposal } from '../utils/db'
+import { fetchList, safePost, safePut, postJson, putJson, fetchOne, postJsonPath } from '../utils/api'
+import { emitPlayersLoaded, emitPlayersUpdated, emitListReady, emitRowAdded } from '../utils/events'
+import { normalizeRow } from '../utils/normalize'
+import { AGE_GROUPS, POSITIONS, RELATIONSHIPS } from '../utils/constants'
+import { login, getToken } from '../utils/auth'
+import { API_ORIGIN, apiUrl } from '../utils/apiBase'
+import { LayoutGrid, List as ListIcon, Users, User, Heart, Shield, Activity, FileText, ChevronDown, MoreVertical, School, Mail, Phone, MapPin, Calendar, CreditCard, AlertCircle, X, UserCheck, Crown } from 'lucide-react'
+import { isEmail, isPhoneZA, isIdNumber } from '../utils/validation'
+import SearchBar from '../components/SearchBar'
+import { trackUserAction, trackPerformance, trackError, measurePerformance, trackApiCall } from '../utils/metrics'
+import MetricsDashboard from '../components/MetricsDashboard'
+import PlayerHistoryPanel from '../components/PlayerHistoryPanel'
+import PlayerApprovalsPanel from '../components/PlayerApprovalsPanel'
+import PlayerMigrationPanel from '../components/PlayerMigrationPanel'
+import PlayerCard from '../components/PlayerCard'
+import SchoolCard from '../components/SchoolCard'
+import RefereeCard from '../components/RefereeCard'
+import SchoolAdminDashboard from '../components/dashboards/SchoolAdminDashboard'
+import ZoneCoordinatorDashboard from '../components/dashboards/ZoneCoordinatorDashboard'
+
+type Role = 'Player' | 'Referee' | 'Coach' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin'
+
+const COACH_PLAYERS_VIEW_KEY = 'ui:coach:players:view'
+const SCHOOLADMIN_TEAMS_VIEW_KEY = 'ui:schooladmin:teams:view'
+
+export default function Dashboard({ role }: { role: Role }) {
+  const [zone, setZone] = useState<string>()
+  const [school, setSchool] = useState<string>()
+  const [schoolNameTop, setSchoolNameTop] = useState<string>('')
+  const [players, setPlayers] = useState<any[]>([])
+  const [coaches, setCoaches] = useState<any[]>([])
+  const [referees, setReferees] = useState<any[]>([])
+  const [schoolsList, setSchoolsList] = useState<any[]>([])
+  const [admins, setAdmins] = useState<any[]>([])
+  const [teamSel, setTeamSel] = useState<string>('')
+  const [viewSel, setViewSel] = useState<'teams' | 'coaches' | 'referees' | 'admins'>('teams')
+  const [selectedPlayer, setSelectedPlayer] = useState<any | null>(null)
+  const [selectedCoach, setSelectedCoach] = useState<any | null>(null)
+  const filteredPlayers = useMemo(() => filterBy(role, players, zone, school), [role, players, zone, school])
+  const filteredCoaches = useMemo(() => filterBy(role, coaches, zone, school), [role, coaches, zone, school])
+  const filteredReferees = useMemo(() => filterBy(role, referees, zone, school), [role, referees, zone, school])
+  const filteredSchools = useMemo(() => filterBy(role, schoolsList, zone, school), [role, schoolsList, zone, school])
+  const filteredAdmins = useMemo(() => filterBy(role, admins, zone, school), [role, admins, zone, school])
+  const teams = useMemo(() => {
+    const t1 = filteredCoaches.map((c) => String((c.data?.team || '') || ''))
+    const t2 = filteredPlayers.map((p) => String((p.data?.team || p.data?.ageGroup || '') || ''))
+    const set = new Set<string>([...t1, ...t2].filter((x) => !!x))
+    return Array.from(set)
+  }, [filteredCoaches, filteredPlayers])
+  const teamOptions = useMemo(() => {
+    const base = ['U15', 'U16', 'U17', 'U19']
+    const set = new Set<string>([...base, ...teams, 'Unassigned'])
+    return Array.from(set)
+  }, [teams])
+  useEffect(() => { if (viewSel !== 'teams') setTeamSel('') }, [viewSel])
+  useEffect(() => {
+    const z = localStorage.getItem('auth:zoneId') || undefined
+    const s = localStorage.getItem('auth:schoolId') || undefined
+    if (z) setZone(z)
+    if (s) setSchool(s)
+  }, [])
+  useEffect(() => { load() }, [zone, school])
+  useEffect(() => { load() }, [role])
+  useEffect(() => {
+    (async () => {
+      const filters: any = { zoneId: zone, schoolId: school }
+      const list = await fetchList('schools', filters)
+      const s = Array.isArray(list) && list.length ? list[0] : null
+      const authSchoolId = typeof window !== 'undefined' ? (localStorage.getItem('auth:schoolId') || '') : ''
+      setSchoolNameTop(String(s?.data?.name || s?.name || authSchoolId || ''))
+    })()
+  }, [zone, school])
+  useEffect(() => {
+    function onInsert(e: any) {
+      const d = e?.detail
+      if (d?.entity === 'players' && d?.row) {
+        const nr = normalizeRow(d.row)
+        setPlayers((prev) => {
+          const exists = prev.some((p) => p.id === nr.id)
+          if (exists) return prev
+          return [nr, ...prev]
+        })
+      }
+    }
+    window.addEventListener('app:list:insert', onInsert as any)
+    return () => { window.removeEventListener('app:list:insert', onInsert as any) }
+  }, [])
+  useEffect(() => {
+    if (role) {
+      const email = localStorage.getItem('auth:email') || undefined
+      login(role, zone, school, email)
+    }
+  }, [role, zone, school])
+  async function load() {
+    const startTime = Date.now()
+    trackUserAction('dashboard_load', 'load_data', { role, zone, school })
+    
+    try {
+      const filters: any = { zoneId: zone, schoolId: school }
+      if (role === 'Player') {
+        const p = await measurePerformance('fetch_players', () => fetchList('players'))
+        setPlayers(p)
+        try { 
+          window.dispatchEvent(new CustomEvent('data:players:loaded', { detail: { count: p.length } })) 
+        } catch {}
+        trackPerformance('dashboard_load', Date.now() - startTime, true, { role: 'Player', playerCount: p.length })
+        return
+      }
+      
+      let p = await measurePerformance('fetch_players', () => fetchList('players', filters)) as any[]
+      if (!Array.isArray(p) || p.length === 0) {
+        p = await measurePerformance('fetch_players_fallback', () => fetchList('players')) as any[]
+      }
+      const [c, r, s, a] = await Promise.all([
+        measurePerformance('fetch_coaches', () => fetchList('coaches', filters)),
+        measurePerformance('fetch_referees', () => fetchList('referees', filters)),
+        measurePerformance('fetch_schools', () => fetchList('schools', filters)),
+        measurePerformance('fetch_admins', () => fetchList('admins', filters)),
+      ])
+      
+      setPlayers(p)
+      emitPlayersLoaded(p.length)
+      try { 
+        requestAnimationFrame(() => emitListReady('players', p.length)) 
+      } catch { 
+        setTimeout(() => emitListReady('players', p.length), 50) 
+      }
+      setCoaches(c)
+      setReferees(r)
+      setSchoolsList(s)
+      setAdmins(a)
+      
+      trackPerformance('dashboard_load', Date.now() - startTime, true, {
+        role,
+        playerCount: p.length,
+        coachCount: c.length,
+        refereeCount: r.length,
+        schoolCount: s.length,
+        adminCount: a.length
+      })
+    } catch (error: any) {
+      trackError(error.message, 'dashboard_load', error.stack, { role, zone, school })
+      throw error
+    }
+  }
+  return (
+    <section>
+      <h1 className="mb-3 text-xl font-bold">{schoolNameTop || '—'}</h1>
+      {role === 'Player' ? (
+        <PlayerView players={players} />
+      ) : role === 'Coach' ? (
+        <CoachView role={role} players={players} onRefresh={async () => {
+          const filters: any = { zoneId: zone, schoolId: school }
+          const p = await fetchList('players', filters)
+          setPlayers(p); emitPlayersLoaded(p.length); try { requestAnimationFrame(() => emitListReady('players', p.length)) } catch { setTimeout(() => emitListReady('players', p.length), 50) }
+        }} />
+      ) : role === 'Referee' ? (
+        <RefereeDashboard referees={filteredReferees} />
+      ) : role === 'EPHSRUAdmin' ? (
+        <EPHSRUAdminDashboard schools={filteredSchools} admins={filteredAdmins} referees={referees} />
+      ) : role === 'ZoneCoordinator' ? (
+        <ZoneCoordinatorDashboard 
+          zone={zone}
+          schools={filteredSchools}
+          players={filteredPlayers}
+          coaches={filteredCoaches}
+          referees={filteredReferees}
+          onRefresh={load}
+        />
+      ) : role === 'SchoolAdmin' ? (
+        <SchoolAdminDashboard 
+          zone={zone} 
+          school={school} 
+          schoolNameTop={schoolNameTop} 
+          players={filteredPlayers} 
+          coaches={filteredCoaches} 
+          referees={filteredReferees} 
+          admins={filteredAdmins} 
+          onRefresh={load} 
+        />
+      ) : (
+        <>
+          <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {role === 'SchoolAdmin' ? (
+              <>
+                <div className="rounded-md border bg-white p-2">
+                  <div className="text-xs text-gray-600">Zone</div>
+                  <div className="text-sm font-semibold">{zone || '—'}</div>
+                </div>
+                <div className="rounded-md border bg-white p-2">
+                  <div className="text-xs text-gray-600">School</div>
+                  <div className="text-sm font-semibold">{school || '—'}</div>
+                </div>
+                <div className="rounded-md border border-brand/30 bg-brand/5 p-2 sm:col-span-2 ring-1 ring-brand/20">
+                  <label className="block">
+                    <span className="text-sm font-medium text-brand">View</span>
+                    <select className="mt-1 w-full rounded-md border p-2" value={viewSel} onChange={(e) => setViewSel(e.target.value as any)}>
+                      <option value="teams">Teams</option>
+                      <option value="coaches">Coaches</option>
+                      <option value="referees">Referees</option>
+                      <option value="admins">Admins</option>
+                    </select>
+                  </label>
+                </div>
+                {viewSel === 'teams' && (
+                  <div className="rounded-md border border-brand/30 bg-brand/5 p-2 sm:col-span-2 ring-1 ring-brand/20">
+                    <label className="block">
+                      <span className="text-sm font-medium text-brand">Team</span>
+                      <select className="mt-1 w-full rounded-md border p-2" value={teamSel} onChange={(e) => setTeamSel(e.target.value)}>
+                        <option value="">All teams</option>
+                        {teamOptions.map((t) => (<option key={t} value={t}>{t}</option>))}
+                      </select>
+                    </label>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <ZoneSelect value={zone} onChange={setZone} />
+                <SchoolSelect zoneId={zone} value={school} onChange={setSchool} />
+              </>
+            )}
+          </div>
+          <div className={role === 'SchoolAdmin' && (viewSel === 'coaches' || viewSel === 'admins') ? 'grid grid-cols-1 gap-3 sm:grid-cols-1' : 'grid grid-cols-1 gap-3 sm:grid-cols-2'}>
+            {role !== 'SchoolAdmin' && (<Card title="Schools" items={filteredSchools} fields={['schoolId','zoneId','address']} />)}
+            {role === 'SchoolAdmin' ? (
+              viewSel === 'teams' ? (
+                <TeamPlayers players={filteredPlayers} teamSel={teamSel} onSelect={(p) => setSelectedPlayer(p)} />
+              ) : viewSel === 'coaches' ? (
+                <ManageCoaches zone={zone} school={school} onSelect={(c) => setSelectedCoach(c)} onUpdated={async () => {
+                  const filters: any = { zoneId: zone, schoolId: school }
+                  const c = await fetchList('coaches', filters)
+                  if (c.length) setCoaches(c)
+                }} />
+              ) : viewSel === 'admins' ? (
+                <ManageMyAdmin zone={zone} school={school} onUpdated={async () => {
+                  const a = await fetchList('admins', { zoneId: zone, schoolId: school })
+                  if (a.length) setAdmins(a)
+                }} />
+              ) : (
+                <Card title="Referees" items={filteredReferees} fields={['name','surname','zoneId']} />
+              )
+            ) : role === 'EPHSRUAdmin' && viewSel === 'admins' ? (
+              <ManageAllAdmins onUpdated={async () => {
+                const a = await fetchList('admins')
+                if (a.length) setAdmins(a)
+              }} />
+            ) : (
+              <Card title="Players" items={filteredPlayers} fields={['name','surname','schoolId','zoneId','ageGroup']} />
+            )}
+            {role !== 'SchoolAdmin' && (
+              <Card title="Coaches" items={filteredCoaches} fields={['name','surname','schoolId','zoneId']} />
+            )}
+            {role !== 'SchoolAdmin' && (
+              <Card title="Referees" items={filteredReferees} fields={['name','surname','zoneId']} />
+            )}
+            <Card title="Admins" items={filteredAdmins} fields={['name','surname','schoolId','zoneId']} />
+          </div>
+          {selectedPlayer && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setSelectedPlayer(null)}>
+              <div className="max-w-lg w-[90%] rounded-lg border bg-white p-4 shadow" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {(() => {
+                      const raw = String(selectedPlayer.data?.photoUrl || '')
+                      const src = raw.startsWith('/uploads') ? `${API_ORIGIN}${raw}` : raw
+                      const initials = (((selectedPlayer.data?.name || '').charAt(0) + (selectedPlayer.data?.surname || '').charAt(0)).toUpperCase() || 'P')
+                      return src ? (
+                        <img src={src} alt="Profile" className="h-14 w-14 rounded-full object-cover" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
+                      ) : (
+                        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-brand/10 text-brand ring-1 ring-brand/30">{initials}</div>
+                      )
+                    })()}
+                    <div className="text-lg font-semibold">{selectedPlayer.data?.name} {selectedPlayer.data?.surname}</div>
+                  </div>
+                  <button className="rounded-md border px-2 py-1" onClick={() => setSelectedPlayer(null)}>Close</button>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="text-sm"><span className="mr-2 font-semibold">Team</span><span>{selectedPlayer.data?.team || selectedPlayer.data?.ageGroup || '—'}</span></div>
+                  <div className="text-sm"><span className="mr-2 font-semibold">School</span><span>{selectedPlayer.data?.schoolId || '—'}</span></div>
+                  <div className="text-sm"><span className="mr-2 font-semibold">Zone</span><span>{selectedPlayer.data?.zoneId || '—'}</span></div>
+                  <div className="text-sm"><span className="mr-2 font-semibold">Position</span><span>{selectedPlayer.data?.position || '—'}</span></div>
+                  <div className="text-sm"><span className="mr-2 font-semibold">ID/Passport</span><span>{selectedPlayer.data?.idNumber || '—'}</span></div>
+                  <div className="text-sm"><span className="mr-2 font-semibold">Mobile</span><span>{selectedPlayer.data?.phone || '—'}</span></div>
+                  <div className="text-sm"><span className="mr-2 font-semibold">Email</span><span>{selectedPlayer.data?.email || '—'}</span></div>
+                  <div className="text-sm sm:col-span-2"><span className="mr-2 font-semibold">Address</span><span>{selectedPlayer.data?.address || '—'}</span></div>
+                </div>
+              </div>
+            </div>
+          )}
+          {selectedCoach && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setSelectedCoach(null)}>
+              <div className="max-w-lg w-[90%] rounded-lg border bg-white p-4 shadow" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-base font-semibold">{(selectedCoach.data?.name || '')} {(selectedCoach.data?.surname || '')}</div>
+                  <button className="rounded-md border px-2 py-1" onClick={() => setSelectedCoach(null)}>Close</button>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="text-sm"><span className="mr-2 font-semibold">Email</span><span>{selectedCoach.data?.email || selectedCoach.email || '—'}</span></div>
+                  <div className="text-sm"><span className="mr-2 font-semibold">Mobile</span><span>{selectedCoach.data?.contactNumber || '—'}</span></div>
+                  <div className="text-sm"><span className="mr-2 font-semibold">ID/Passport</span><span>{selectedCoach.data?.idNumber || '—'}</span></div>
+                  <div className="text-sm"><span className="mr-2 font-semibold">Team</span><span>{selectedCoach.data?.team || '—'}</span></div>
+                  <div className="text-sm sm:col-span-2"><span className="mr-2 font-semibold">Qualifications</span><span>{selectedCoach.data?.qualifications || '—'}</span></div>
+                  <div className="text-sm sm:col-span-2"><span className="mr-2 font-semibold">Experience</span><span>{selectedCoach.data?.experience || '—'}</span></div>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function Card({ title, items, fields }: { title: string; items: any[]; fields: string[] }) {
+  return (
+    <div className="rounded-lg border bg-white p-3 shadow w-full col-span-1 sm:col-span-2">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-base font-semibold">{title}</div>
+        <div className="text-sm text-gray-600">{items.length}</div>
+      </div>
+      <div className="divide-y">
+        {items.slice(0, 20).map((it) => (
+          <div key={it.id} className="py-2 text-sm">
+            {fields.map((f) => (
+              <span key={f} className="mr-2">{it.data[f]}</span>
+            ))}
+          </div>
+        ))}
+        {items.length === 0 && <div className="py-2 text-sm text-gray-500">No records</div>}
+      </div>
+    </div>
+  )
+}
+
+function TeamPlayers({ players, teamSel, onSelect }: { players: any[]; teamSel: string; onSelect: (p: any) => void }) {
+  const [viewMode, setViewMode] = useState<'cards' | 'list'>(() => {
+    try {
+      return localStorage.getItem(SCHOOLADMIN_TEAMS_VIEW_KEY) === 'list' ? 'list' : 'cards'
+    } catch {
+      return 'cards'
+    }
+  })
+  const [switching, setSwitching] = useState(false)
+  useEffect(() => {
+    try { localStorage.setItem(SCHOOLADMIN_TEAMS_VIEW_KEY, viewMode) } catch {}
+  }, [viewMode])
+  const teams = useMemo(() => {
+    const set = new Set<string>(players.map((p) => String(p.data?.team || p.data?.ageGroup || '')).filter((x) => !!x))
+    return Array.from(set)
+  }, [players])
+  const unassigned = players.filter((p) => !String(p.data?.team || p.data?.ageGroup || ''))
+  const teamsToShow = teamSel ? teams.filter((t) => t === teamSel) : teams
+  const showUnassigned = teamSel === '' || teamSel === 'Unassigned'
+
+  const listRows = useMemo(() => {
+    const list = players.filter((p) => {
+      const t = String(p.data?.team || p.data?.ageGroup || '')
+      const isUnassigned = !t
+      if (teamSel === 'Unassigned') return isUnassigned
+      if (teamSel) return t === teamSel
+      return true
+    })
+    const sorted = [...list].sort((a, b) => {
+      const at = String(a.data?.team || a.data?.ageGroup || '')
+      const bt = String(b.data?.team || b.data?.ageGroup || '')
+      if (at !== bt) return at.localeCompare(bt)
+      const an = String(a.data?.surname || '').localeCompare(String(b.data?.surname || ''))
+      if (an !== 0) return an
+      return String(a.data?.name || '').localeCompare(String(b.data?.name || ''))
+    })
+    return sorted
+  }, [players, teamSel])
+
+  return (
+    <div className="rounded-lg border bg-white p-3 shadow sm:col-span-2">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-3">
+          <div className="text-base font-semibold">Players by Team</div>
+          <div className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700 ring-1 ring-gray-300">Teams: {teamsToShow.length + (showUnassigned ? 1 : 0)}</div>
+          <div className="inline-flex items-center rounded-full bg-brand/10 px-3 py-1 text-sm font-semibold text-brand ring-1 ring-brand/30">Total: {players.length}</div>
+        </div>
+        <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Player view">
+          <button type="button" aria-label="List view" aria-pressed={viewMode === 'list'} className={`inline-flex items-center gap-1 px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 ${viewMode === 'list' ? 'bg-brand text-white' : ''}`} onClick={() => {
+            if (viewMode === 'list') return
+            setSwitching(true)
+            setTimeout(() => { setViewMode('list'); setSwitching(false) }, 120)
+          }}>
+            <ListIcon size={16} aria-hidden="true" />
+            List
+          </button>
+          <button type="button" aria-label="Card view" aria-pressed={viewMode === 'cards'} className={`inline-flex items-center gap-1 px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 ${viewMode === 'cards' ? 'bg-brand text-white' : ''}`} onClick={() => {
+            if (viewMode === 'cards') return
+            setSwitching(true)
+            setTimeout(() => { setViewMode('cards'); setSwitching(false) }, 120)
+          }}>
+            <LayoutGrid size={16} aria-hidden="true" />
+            Cards
+          </button>
+        </div>
+      </div>
+      <div className={`transition-opacity duration-150 ${switching ? 'opacity-0' : 'opacity-100'}`}>
+      {viewMode === 'list' ? (
+        <div className="overflow-x-auto rounded-md border">
+          <table className="w-full border-separate border-spacing-0 text-sm">
+            <thead>
+              <tr className="bg-gray-50">
+                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Team</th>
+                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Name</th>
+                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Surname</th>
+                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold hidden sm:table-cell">Age Group</th>
+                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold hidden md:table-cell">Gender</th>
+              </tr>
+            </thead>
+            <tbody>
+              {listRows.map((p) => {
+                const d = p.data || {}
+                const team = String(d.team || d.ageGroup || '') || 'Unassigned'
+                return (
+                  <tr key={p.id} className="cursor-pointer hover:bg-gray-50" onClick={() => onSelect(p)}>
+                    <td className="border-b px-3 py-2">{team}</td>
+                    <td className="border-b px-3 py-2">{d.name}</td>
+                    <td className="border-b px-3 py-2">{d.surname}</td>
+                    <td className="border-b px-3 py-2 hidden sm:table-cell">{d.ageGroup || team}</td>
+                    <td className="border-b px-3 py-2 hidden md:table-cell">{d.gender || '—'}</td>
+                  </tr>
+                )
+              })}
+              {listRows.length === 0 && (
+                <tr>
+                  <td className="px-3 py-3 text-gray-500" colSpan={5}>No players</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+          {teamsToShow.map((t) => (
+            <div key={t} className="rounded-md border p-2">
+              <div className="mb-1 text-sm font-semibold">{t}</div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                {players.filter((p) => String(p.data?.team || p.data?.ageGroup || '') === t).map((it) => (
+                  <PlayerCard key={it.id} player={it} badge={String(it.data?.ageGroup || it.data?.team || '—')} onClick={() => onSelect(it)} />
+                ))}
+                {players.filter((p) => String(p.data?.team || p.data?.ageGroup || '') === t).length === 0 && <div className="py-2 text-sm text-gray-500">No players</div>}
+              </div>
+            </div>
+          ))}
+          {showUnassigned && (
+            <div className="rounded-md border p-2">
+              <div className="mb-1 text-sm font-semibold">Unassigned</div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                {unassigned.map((it) => (
+                  <PlayerCard key={it.id} player={it} badge={String(it.data?.ageGroup || it.data?.team || '—')} onClick={() => onSelect(it)} />
+                ))}
+                {unassigned.length === 0 && <div className="py-2 text-sm text-gray-500">No unassigned players</div>}
+              </div>
+            </div>
+          )}
+          {teamsToShow.length === 0 && !unassigned.length && <div className="py-2 text-sm text-gray-500">No teams</div>}
+        </div>
+      )}
+      </div>
+    </div>
+  )
+}
+
+function ManageCoaches({ zone, school, onSelect, onUpdated }: { zone?: string; school?: string; onSelect?: (c: any) => void; onUpdated: () => void }) {
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState({ name: '', surname: '', idNumber: '', phone: '', email: '', team: '' })
+  const [list, setList] = useState<any[]>([])
+  useEffect(() => { load() }, [zone, school])
+  async function load() {
+    const filters: any = { zoneId: zone, schoolId: school }
+    const c = await fetchList('coaches', filters)
+    setList(c)
+  }
+  async function addCoach() {
+    if (!school) return
+    const payload: any = {
+      name: form.name,
+      surname: form.surname,
+      idNumber: form.idNumber,
+      contactNumber: form.phone,
+      email: form.email,
+      schoolId: school,
+      zoneId: zone || '',
+      team: form.team,
+    }
+    await login('SchoolAdmin', zone, school)
+    const res = await postJson('coaches', payload)
+    if (res) {
+      setForm({ name: '', surname: '', idNumber: '', phone: '', email: '', team: '' })
+      setAdding(false)
+      await load(); await onUpdated()
+    }
+  }
+  async function updateTeam(c: any, team: string) {
+    const id = c.id || ''
+    const rowZone = (c.zoneId ?? c.data?.zoneId ?? zone ?? '') as string
+    const rowSchool = (c.schoolId ?? c.data?.schoolId ?? school ?? '') as string
+    await login('SchoolAdmin', rowZone, rowSchool)
+    const ok = await safePut('coaches', id, { team, schoolId: rowSchool, zoneId: rowZone })
+    if (ok) { await load(); await onUpdated() }
+  }
+  return (
+    <div className="rounded-lg border bg-white p-3 shadow">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="text-base font-semibold">Coaches</div>
+          <div className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700 ring-1 ring-gray-300">{list.length}</div>
+        </div>
+        <button className="rounded-md bg-brand px-3 py-2 text-white" onClick={() => setAdding((v) => !v)}>{adding ? 'Cancel' : 'Add Coach'}</button>
+      </div>
+      {adding && (
+        <div className="mb-3 rounded-md border p-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="block"><span className="text-sm font-medium">Name</span><input className="mt-1 w-full rounded-md border p-2" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+            <label className="block"><span className="text-sm font-medium">Surname</span><input className="mt-1 w-full rounded-md border p-2" value={form.surname} onChange={(e) => setForm({ ...form, surname: e.target.value })} /></label>
+            <label className="block"><span className="text-sm font-medium">ID/Passport</span><input className="mt-1 w-full rounded-md border p-2" value={form.idNumber} onChange={(e) => setForm({ ...form, idNumber: e.target.value })} /></label>
+            <label className="block"><span className="text-sm font-medium">Mobile</span><input className="mt-1 w-full rounded-md border p-2" placeholder="+27" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
+            <label className="block sm:col-span-2"><span className="text-sm font-medium">Email</span><input type="email" className="mt-1 w-full rounded-md border p-2" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
+            <label className="block sm:col-span-2"><span className="text-sm font-medium">Team</span>
+              <select className="mt-1 w-full rounded-md border p-2" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}>
+                <option value="">Select...</option>
+                {['U15', 'U16', 'U17', 'U19'].map((t) => (<option key={t} value={t}>{t}</option>))}
+              </select>
+            </label>
+          </div>
+          <div className="mt-3 text-right"><button className="rounded-md bg-brand px-3 py-2 text-white" onClick={addCoach}>Save Coach</button></div>
+        </div>
+      )}
+      <div className="rounded-md border">
+        <div className="divide-y">
+          {list.map((c) => {
+            const d = c.data || {}
+            const initials = (((d.name || '').charAt(0) + (d.surname || '').charAt(0)).toUpperCase() || 'C')
+            return (
+              <div key={c.id} className={`flex items-center justify-between p-3 ${onSelect ? 'cursor-pointer' : ''}`} onClick={() => { if (onSelect) onSelect(c) }}>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand/10 text-brand ring-1 ring-brand/30">{initials}</div>
+                  <div>
+                    <div className="text-sm font-semibold">{d.name} {d.surname}</div>
+                    <div className="text-xs text-gray-700">{d.email || c.email || ''}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select className="rounded-md border p-1 text-sm" defaultValue={d.team || ''} onChange={(e) => updateTeam(c, e.currentTarget.value)}>
+                    <option value="">Team</option>
+                    {['U15', 'U16', 'U17', 'U19'].map((t) => (<option key={t} value={t}>{t}</option>))}
+                  </select>
+                </div>
+              </div>
+            )
+          })}
+          {list.length === 0 && <div className="py-2 text-sm text-gray-500">No coaches</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function filterBy(role: Role, items: any[], zone?: string, school?: string) {
+  let list = items
+  if (zone) list = list.filter((x) => String(x.data.zoneId ?? '') === zone)
+  if (school) list = list.filter((x) => String(x.data.schoolId ?? '') === school)
+  if (role === 'SchoolAdmin') {
+    if (school) return list.filter((x) => String(x.data.schoolId ?? '') === school)
+    return list.filter((x) => x.data.schoolId)
+  }
+  if (role === 'Coach') {
+    return list.filter((x) => x.data.schoolId)
+  }
+  if (role === 'ZoneCoordinator') {
+    return list.filter((x) => x.data.zoneId)
+  }
+  return list
+}
+
+function PlayerView({ players }: { players: any[] }) {
+  const email = typeof window !== 'undefined' ? localStorage.getItem('auth:email') || '' : ''
+  const me = players.find((p) => String(p.data?.email || p.email || '') === email)
+  if (!me) {
+    return <div className="rounded-lg border bg-white p-3 text-sm text-gray-600">No player record found</div>
+  }
+  
+  // Check for pending proposals for this player
+  const proposals = getProposals('Player').filter((pp) => {
+    const pid = me.id
+    const sid = me.data?.serverId
+    const pem = String(me.email ?? me.data?.email ?? '')
+    return (pid === pp.recordId) || (sid === pp.recordId) || (pem && pem === String(pp.recordId))
+  })
+  
+  const pendingFields = proposals.filter(pp => pp.status === 'pending').map(pp => pp.field)
+  const approvedFields = proposals.filter(pp => pp.status === 'approved').map(pp => pp.field)
+  const rejectedFields = proposals.filter(pp => pp.status === 'rejected').map(pp => pp.field)
+  
+  // Show notification for recently approved/rejected fields
+  useEffect(() => {
+    if (approvedFields.length > 0 || rejectedFields.length > 0) {
+      const message = []
+      if (approvedFields.length > 0) {
+        message.push(`${approvedFields.length} field${approvedFields.length > 1 ? 's' : ''} approved: ${approvedFields.join(', ')}`)
+      }
+      if (rejectedFields.length > 0) {
+        message.push(`${rejectedFields.length} field${rejectedFields.length > 1 ? 's' : ''} rejected: ${rejectedFields.join(', ')}`)
+      }
+      
+      // Show notification (you could use a toast library here)
+      const notification = document.createElement('div')
+      notification.className = 'fixed top-4 right-4 z-50 rounded-md border bg-white p-3 shadow-lg'
+      notification.innerHTML = `
+        <div class="text-sm font-semibold">${message.join('. ')}</div>
+        <div class="mt-1 text-xs text-gray-600">Your profile updates have been reviewed</div>
+        <button class="mt-2 rounded-md border px-2 py-1 text-xs" onclick="this.parentElement.remove()">Dismiss</button>
+      `
+      document.body.appendChild(notification)
+      
+      // Auto-dismiss after 5 seconds
+      setTimeout(() => {
+        if (notification.parentElement) {
+          notification.remove()
+        }
+      }, 5000)
+      
+      // Clear the proposals after showing notification
+      setTimeout(() => {
+        proposals.forEach(pp => {
+          if (pp.status === 'approved' || pp.status === 'rejected') {
+            deleteProposal('Player', pp.id)
+          }
+        })
+      }, 1000)
+    }
+  }, [approvedFields.length, rejectedFields.length])
+  
+  const d0 = { 
+    ...(me.data || {}),
+    name: me.name !== undefined ? me.name : (me.data?.name || ''),
+    surname: me.surname !== undefined ? me.surname : (me.data?.surname || ''),
+    email: me.email !== undefined ? me.email : (me.data?.email || ''),
+    schoolId: me.schoolId !== undefined ? me.schoolId : (me.data?.schoolId || ''),
+    zoneId: me.zoneId !== undefined ? me.zoneId : (me.data?.zoneId || ''),
+    ageGroup: me.ageGroup !== undefined ? me.ageGroup : (me.data?.ageGroup || ''),
+    phone: me.contactNumber !== undefined ? me.contactNumber : (me.data?.phone || ''),
+    idNumber: me.idNumber !== undefined ? me.idNumber : (me.data?.idNumber || ''),
+  }
+  const [data1, setData1] = useState<any>(d0)
+  const initialPhoto = typeof d0.photoUrl === 'string' && d0.photoUrl.startsWith('/uploads') ? `${API_ORIGIN}${d0.photoUrl}` : (d0.photoUrl || '')
+  const [photo, setPhoto] = useState<string>(initialPhoto)
+  const [refreshKey, setRefreshKey] = useState<number>(0)
+  const locked: string[] = Array.isArray(data1.lockedFields) ? data1.lockedFields : []
+  const [preview, setPreview] = useState<string | null>(null)
+  const [loading, setLoading] = useState<boolean>(true)
+  
+  useEffect(() => {
+    const next = {
+      ...(me.data || {}),
+      name: me.name !== undefined ? me.name : (me.data?.name || ''),
+      surname: me.surname !== undefined ? me.surname : (me.data?.surname || ''),
+      email: me.email !== undefined ? me.email : (me.data?.email || ''),
+      schoolId: me.schoolId !== undefined ? me.schoolId : (me.data?.schoolId || ''),
+      zoneId: me.zoneId !== undefined ? me.zoneId : (me.data?.zoneId || ''),
+      ageGroup: me.ageGroup !== undefined ? me.ageGroup : (me.data?.ageGroup || ''),
+      phone: me.contactNumber !== undefined ? me.contactNumber : (me.data?.phone || ''),
+      idNumber: me.idNumber !== undefined ? me.idNumber : (me.data?.idNumber || ''),
+    }
+    setData1(next)
+    const ph = typeof next.photoUrl === 'string' && next.photoUrl.startsWith('/uploads') ? `${API_ORIGIN}${next.photoUrl}` : (next.photoUrl || '')
+    setPhoto(ph)
+    const id = me.id || me.data?.serverId || ''
+    if (id) {
+      ;(async () => {
+        setLoading(true)
+        const deadline = Date.now() + 30000
+        while (Date.now() < deadline) {
+          const one = await fetchOne('players', id)
+          if (one?.data && ((one.data.name && one.data.name !== next.name) || (one.data.surname && one.data.surname !== next.surname))) {
+            const upd = one.data
+            setData1(upd)
+            const ph2 = typeof upd.photoUrl === 'string' && upd.photoUrl.startsWith('/uploads') ? `${API_ORIGIN}${upd.photoUrl}` : (upd.photoUrl || '')
+            setPhoto(ph2)
+            setLoading(false)
+            try {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  window.dispatchEvent(new CustomEvent('player:self:ready', { detail: { id } }))
+                })
+              })
+            } catch {}
+            return
+          }
+          await new Promise((r) => setTimeout(r, 700))
+        }
+        setLoading(false)
+      })()
+    } else {
+      setLoading(false)
+    }
+  }, [me])
+  useEffect(() => {
+    const id = me.id || me.data?.serverId || ''
+    const h = async () => {
+      if (!id) return
+      setLoading(true)
+      const one = await fetchOne('players', id)
+      if (one?.data) {
+        setData1(one.data)
+        const ph2 = typeof one.data.photoUrl === 'string' && one.data.photoUrl.startsWith('/uploads') ? `${API_ORIGIN}${one.data.photoUrl}` : (one.data.photoUrl || '')
+        setPhoto(ph2)
+      }
+      setLoading(false)
+      try {
+        setTimeout(() => {
+          requestAnimationFrame(() => {
+            window.dispatchEvent(new CustomEvent('player:self:ready', { detail: { id } }))
+          })
+        }, 25)
+      } catch {}
+    }
+    window.addEventListener('data:players:loaded', h as any)
+    window.addEventListener('data:players:updated', h as any)
+    return () => {
+      window.removeEventListener('data:players:loaded', h as any)
+      window.removeEventListener('data:players:updated', h as any)
+    }
+  }, [me])
+  const [showSelfMigrate, setShowSelfMigrate] = useState(false)
+  const [showApprovals, setShowApprovals] = useState(false)
+  const [actionsOpen, setActionsOpen] = useState(false)
+  const [showMissingInfo, setShowMissingInfo] = useState(false)
+  const pid = (me.id || me.data?.serverId || '') as string
+  return (
+    <div className="space-y-6" data-testid="player-self-panel">
+      {loading && <div className="text-sm text-gray-600">Loading player data...</div>}
+      
+      {/* Profile Header Card */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-700 via-blue-600 to-blue-500 text-white shadow-xl">
+        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4xIj48Y2lyY2xlIGN4PSIzMCIgY3k9IjMwIiByPSIyIi8+PC9nPjwvZz48L3N2Zz4=')] opacity-30"></div>
+        <div className="relative px-8 py-8">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center gap-6">
+              <div className="relative rounded-full ring-4 ring-white/20 bg-white p-1 shadow-sm">
+                {photo ? (
+                  <img src={photo} alt="Profile" className="h-24 w-24 rounded-full object-cover" onDoubleClick={() => setPreview(photo)} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
+                ) : (
+                  <div className="flex h-24 w-24 items-center justify-center rounded-full bg-blue-50 text-3xl font-bold text-blue-600">
+                    {(data1.name?.[0] || '')}{(data1.surname?.[0] || '')}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <User className="h-5 w-5 text-blue-100" />
+                  <span className="text-blue-100 text-sm font-medium uppercase tracking-wider">Player Profile</span>
+                </div>
+                <h1 className="text-3xl font-bold mb-2">{data1.name} {data1.surname}</h1>
+                <div className="flex flex-wrap items-center gap-4 text-blue-100">
+                  <span className="flex items-center gap-1">
+                    <School className="h-4 w-4" />
+                    {data1.schoolId || 'No School Assigned'}
+                  </span>
+                  <span>•</span>
+                  <span className="flex items-center gap-1">
+                    <MapPin className="h-4 w-4" />
+                    {data1.zoneId || 'No Zone'}
+                  </span>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex flex-col items-end gap-3">
+               {data1.ageGroup && (
+                <span className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm ring-1 ring-white/30">
+                  {data1.ageGroup}
+                </span>
+               )}
+               {data1.position && (
+                <span className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm ring-1 ring-white/30">
+                  {data1.position}
+                </span>
+               )}
+               {data1.jerseyNumber && (
+                <span className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm ring-1 ring-white/30">
+                  #{data1.jerseyNumber}
+                </span>
+               )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {showMissingInfo && (
+        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="text-lg font-semibold text-gray-900">Fill Missing Information</div>
+            <button className="rounded-md border p-1 text-gray-500 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40" type="button" onClick={() => setShowMissingInfo(false)} aria-label="Close">
+              <X size={16} />
+            </button>
+          </div>
+          {pendingFields.length > 0 && (
+            <div className="mb-4 rounded-md border border-yellow-200 bg-yellow-50 p-4">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="text-yellow-600" size={20} />
+                <span className="text-sm font-semibold text-yellow-800">Pending Review</span>
+              </div>
+              <div className="mt-1 text-sm text-yellow-700">
+                {pendingFields.length} field{pendingFields.length > 1 ? 's' : ''} awaiting approval: {pendingFields.join(', ')}
+              </div>
+            </div>
+          )}
+          <PlayerMissingForm
+            id={me.id}
+            serverId={data1.serverId || ''}
+            data={data1}
+            lockedFields={locked}
+            pendingFields={pendingFields}
+            onUpdated={(nextData, nextLocked) => {
+              const merged = { ...nextData, lockedFields: nextLocked }
+              updateEntity('Player', me.id, merged)
+              setData1(merged)
+            }}
+          />
+        </div>
+      )}
+
+      {showSelfMigrate && pid && (
+        <PlayerMigrationPanel playerId={pid} onDone={() => {}} onClose={() => setShowSelfMigrate(false)} />
+      )}
+      {pid && showApprovals && (
+        <PlayerApprovalsPanel entityId={pid} title="My Approval Requests" onClose={() => setShowApprovals(false)} />
+      )}
+      
+      {/* Content Grid */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Personal Info Card */}
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <User size={18} className="text-brand" /> Personal Information
+             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
+            <Info label="ID/Passport" value={data1.idNumber} icon={CreditCard} />
+            <Info label="Date of Birth" value={data1.dob} icon={Calendar} />
+            <Info label="Gender" value={data1.gender} icon={Users} />
+            <Info label="Mobile" value={data1.phone} icon={Phone} />
+            <Info label="Email" value={data1.email} icon={Mail} />
+            <Info label="Address" value={data1.address} icon={MapPin} />
+          </div>
+        </div>
+
+        {/* Rugby Info Card */}
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm h-fit">
+          <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <Activity size={18} className="text-brand" /> Rugby Profile
+             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
+            <Info label="Age Group" value={data1.ageGroup} icon={Users} />
+            <Info label="Position" value={data1.position} icon={Activity} />
+            <Info label="Jersey" value={data1.jerseyNumber ? `#${data1.jerseyNumber}` : ''} icon={LayoutGrid} />
+            <Info label="Prev. Team" value={data1.previousSchool} icon={School} />
+          </div>
+        </div>
+
+        {/* Medical Info Card */}
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+           <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <Heart size={18} className="text-brand" /> Medical Information
+             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
+            <Info label="Medical Aid" value={data1.medicalAidName} icon={Heart} />
+            <Info label="Number" value={data1.medicalAidNumber} icon={FileText} />
+            <Info label="Allergies" value={data1.allergies} icon={AlertCircle} />
+            <Info label="Chronic" value={data1.chronicConditions} icon={Activity} />
+            <div className="sm:col-span-2">
+               <Info label="Emergency Notes" value={data1.medicalNotes} icon={FileText} />
+            </div>
+          </div>
+        </div>
+
+        {/* Guardian Info Card */}
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+           <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <Shield size={18} className="text-brand" /> Guardian Information
+             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
+            <Info label="Name" value={data1.parentName} icon={User} />
+            <Info label="Surname" value={data1.parentSurname} icon={User} />
+            <Info label="Relation" value={data1.relationship} icon={Users} />
+            <Info label="Contact" value={data1.parentContact} icon={Phone} />
+            <Info label="Email" value={data1.parentEmail} icon={Mail} />
+            <Info label="Signature" value={data1.consentSignature ? 'Signed' : 'Pending'} icon={FileText} />
+          </div>
+        </div>
+      </div>
+
+      {/* Documents Card */}
+      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <FileText size={18} className="text-brand" /> Documents
+             </div>
+        </div>
+        <div className="p-4">
+          <PlayerDocuments ownerId={data1.serverId || ''} refreshKey={refreshKey} />
+        </div>
+      </div>
+
+      {preview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={() => setPreview(null)}>
+          <img src={preview} alt="Preview" className="max-h-[95vh] max-w-[98vw] rounded-md shadow-lg" style={{ transform: 'scale(2)' }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PlayerDocuments({ ownerId, refreshKey }: { ownerId: string; refreshKey?: number }) {
+  const [docs, setDocs] = useState<any[]>([])
+  useEffect(() => { load() }, [ownerId, refreshKey])
+  async function load() {
+    if (!ownerId) { setDocs([]); return }
+    const list = await fetchList('documents', { ownerType: 'players', ownerId })
+    setDocs(list)
+  }
+  if (!ownerId) return <div className="text-sm text-gray-500">No documents</div>
+  return (
+    <div className="mt-2 divide-y">
+      {docs.map((d) => {
+        const url = typeof d.fileUrl === 'string' && d.fileUrl.startsWith('/uploads') ? `${API_ORIGIN}${d.fileUrl}` : d.fileUrl
+        return (
+          <div key={d.id} className="py-2 text-sm">
+            <a href={url} className="text-brand underline" target="_blank" rel="noreferrer">{d.fileName}</a>
+            <span className="ml-2 text-gray-600">({d.status})</span>
+          </div>
+        )
+      })}
+      {docs.length === 0 && <div className="py-2 text-sm text-gray-500">No documents</div>}
+    </div>
+  )
+}
+
+function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; onRefresh: () => void }) {
+  const schoolId = localStorage.getItem('auth:schoolId') || ''
+  const zoneId = localStorage.getItem('auth:zoneId') || ''
+  const [schoolName, setSchoolName] = useState('')
+  const [coachName, setCoachName] = useState('')
+  const [assignedTeam, setAssignedTeam] = useState('')
+  const [query, setQuery] = useState('')
+  const [history, setHistory] = useState<string[]>(() => {
+    try { const v = localStorage.getItem('coach:search:history'); return v ? JSON.parse(v) : [] } catch { return [] }
+  })
+  const [showHistory, setShowHistory] = useState(false)
+  const [pendingOnly, setPendingOnly] = useState(false)
+  const [teamFilter, setTeamFilter] = useState<string>('')
+  const [ageFilter, setAgeFilter] = useState<string>('')
+  const [activeTab, setActiveTab] = useState<'players' | 'pending' | 'metrics'>('players')
+  const [pendingPlayers, setPendingPlayers] = useState<any[]>([])
+  const [pendingApprovals, setPendingApprovals] = useState<any[]>([])
+  const [pendingMigrationRequests, setPendingMigrationRequests] = useState<any[]>([])
+  const [migrationOutcomes, setMigrationOutcomes] = useState<any[]>([])
+  const [migrationDetailOpen, setMigrationDetailOpen] = useState(false)
+  const [migrationDetailLoading, setMigrationDetailLoading] = useState(false)
+  const [migrationDetail, setMigrationDetail] = useState<any | null>(null)
+  const [migrationDetailErr, setMigrationDetailErr] = useState('')
+  const [loadingPending, setLoadingPending] = useState(false)
+  const [hierView, setHierView] = useState(true)
+  const [resultsView, setResultsView] = useState<'cards' | 'list'>(() => {
+    try {
+      return localStorage.getItem(COACH_PLAYERS_VIEW_KEY) === 'list' ? 'list' : 'cards'
+    } catch {
+      return 'cards'
+    }
+  })
+  const [resultsSwitching, setResultsSwitching] = useState(false)
+  const pendingPreloadedRef = useRef(false)
+  const [searchFilters, setSearchFilters] = useState({
+    team: '',
+    ageGroup: '',
+    position: '',
+    status: 'all' as 'pending' | 'approved' | 'rejected' | 'all'
+  })
+  useEffect(() => {
+    try { localStorage.setItem(COACH_PLAYERS_VIEW_KEY, resultsView) } catch {}
+  }, [resultsView])
+  useEffect(() => {
+    const email = (localStorage.getItem('auth:email') || '').trim().toLowerCase()
+    ;(async () => {
+      try {
+        const schools = await fetchList('schools', { zoneId, schoolId })
+        const s = Array.isArray(schools) && schools.length ? schools[0] : null
+        setSchoolName(String(s?.data?.name || s?.name || schoolId || ''))
+        const coaches = await fetchList('coaches', { zoneId, schoolId })
+        let c = Array.isArray(coaches) ? coaches.find((x: any) => String(x.data?.email || x.email || '').trim().toLowerCase() === email) : null
+        if (!c && Array.isArray(coaches) && coaches.length) c = coaches[0]
+        const nm = `${String(c?.data?.name || c?.name || '')} ${String(c?.data?.surname || c?.surname || '')}`.trim()
+        setCoachName(nm || (email || ''))
+        setAssignedTeam(c?.data?.team || '')
+      } catch (e) {
+        console.error('Failed to load coach details', e)
+      }
+    })()
+  }, [zoneId, schoolId])
+  
+  async function loadPending() {
+    if (loadingPendingGuard.current) return
+    loadingPendingGuard.current = true
+    setLoadingPending(true)
+    const startTime = Date.now()
+    trackUserAction('load_pending_players', 'approval_tab')
+    
+    try {
+      const response = await fetch(apiUrl('/pending'), {
+        headers: { Authorization: `Bearer ${getToken()}` }
+      })
+      
+      trackApiCall('/api/pending', 'GET', startTime, {
+        statusCode: response.status,
+        metadata: { source: 'approval_tab' }
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setPendingPlayers((data?.registrations || []).map(normalizeRow))
+        setPendingApprovals((data?.profileUpdates || []).map((r: any) => ({
+          id: r.id,
+          entityId: r.entityId,
+          status: r.status,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+          requestedChanges: Array.isArray(r.requestedChanges) ? r.requestedChanges : [],
+          requester: r.requester || null,
+          approver: r.approver || null,
+          approverNotes: r.approverNotes || '',
+          player: r.player || null
+        })))
+        setPendingMigrationRequests(Array.isArray(data?.migrationRequests) ? data.migrationRequests : [])
+        setMigrationOutcomes(Array.isArray(data?.migrationOutcomes) ? data.migrationOutcomes : [])
+        trackPerformance('load_pending_players', Date.now() - startTime, true, {
+          playerCount: (data?.registrations || []).length
+        })
+      } else {
+        trackError(`Failed to load pending players: ${response.status}`, 'load_pending_players')
+      }
+    } catch (error: any) {
+      trackError(error.message, 'load_pending_players', error.stack)
+      console.error('Failed to load pending players:', error)
+    } finally {
+      setLoadingPending(false)
+      loadingPendingGuard.current = false
+    }
+  }
+  
+  // Approve player
+  async function approvePlayer(playerId: string) {
+    const startTime = Date.now()
+    trackUserAction('approve_player', 'pending_tab', { playerId })
+    
+    try {
+      const response = await fetch(apiUrl(`/players/${playerId}/approve`), {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}` 
+        }
+      })
+      
+      trackApiCall(`/api/players/${playerId}/approve`, 'POST', startTime, {
+        statusCode: response.status,
+        metadata: { playerId, action: 'approve' }
+      })
+      
+      if (response.ok) {
+        setPendingPlayers(prev => prev.filter(p => p.id !== playerId))
+        await onRefresh() // Refresh main player list
+        trackPerformance('approve_player', Date.now() - startTime, true, { playerId })
+      } else {
+        trackError(`Failed to approve player: ${response.status}`, 'approve_player', undefined, { playerId })
+      }
+    } catch (error: any) {
+      trackError(error.message, 'approve_player', error.stack, { playerId })
+      console.error('Failed to approve player:', error)
+    }
+  }
+  
+  // Reject player
+  async function rejectPlayer(playerId: string, reason?: string) {
+    try {
+      const response = await fetch(apiUrl(`/players/${playerId}/reject`), {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}` 
+        },
+        body: JSON.stringify({ reason: reason || 'Rejected by coach' })
+      })
+      if (response.ok) {
+        setPendingPlayers(prev => prev.filter(p => p.id !== playerId))
+        await onRefresh() // Refresh main player list
+      }
+    } catch (error) {
+      console.error('Failed to reject player:', error)
+    }
+  }
+  
+  // Bulk approve players
+  async function bulkApprovePlayers(playerIds: string[]) {
+    try {
+      const response = await fetch(apiUrl('/players/bulk-approve'), {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}` 
+        },
+        body: JSON.stringify({ playerIds })
+      })
+      if (response.ok) {
+        const result = await response.json()
+        setPendingPlayers(prev => prev.filter(p => !playerIds.includes(p.id)))
+        await onRefresh() // Refresh main player list
+        return result
+      }
+    } catch (error) {
+      console.error('Failed to bulk approve players:', error)
+    }
+  }
+  
+  // Load pending players when tab is switched
+  useEffect(() => {
+    if (activeTab === 'pending') {
+      try {
+        const reviewKey = `notify:coach:lastReviewAt:${schoolId}`
+        localStorage.setItem(reviewKey, String(Date.now()))
+      } catch {}
+      loadPending()
+    }
+  }, [activeTab])
+  // Preload pending players in background so banner can show on Players tab
+  useEffect(() => {
+    if (!pendingPreloadedRef.current && activeTab !== 'pending') {
+      pendingPreloadedRef.current = true
+      loadPending()
+    }
+  }, [activeTab])
+  
+  const list = useMemo(() => {
+    return players.filter((p) => {
+      const ps = String(p.schoolId ?? p.data?.schoolId ?? '')
+      const pz = String(p.zoneId ?? p.data?.zoneId ?? '')
+      if (schoolId && ps !== schoolId) return false
+      if (zoneId && pz !== zoneId) return false
+      
+      // Filter by assigned team if coach has one
+      if (assignedTeam) {
+        const pTeam = p.data?.team || p.data?.ageGroup || ''
+        if (pTeam !== assignedTeam) return false
+      }
+      
+      return true
+    })
+  }, [players, schoolId, zoneId, assignedTeam])
+
+  const suggestions = useMemo(() => {
+    if (query.length < 2) return []
+    const names = list.map((p) => `${p.data?.name || ''} ${p.data?.surname || ''}`.trim()).filter((x) => !!x)
+    const teams = list.map((p) => String(p.data?.team || p.data?.ageGroup || '')).filter((x) => !!x)
+    const base = Array.from(new Set<string>([...names, ...teams]))
+    const q = query.toLowerCase()
+    return base.filter((x) => x.toLowerCase().includes(q)).slice(0, 6)
+  }, [query, list])
+
+  const localPending = useMemo(() => {
+    const raw = getProposals('Player')
+    return raw.filter((pp) => {
+      if (pp.status !== 'pending') return false
+      return list.some((p) => {
+        const dn = p.data || {}
+        const pid = p.id
+        const sid = dn.serverId
+        const pem = String(p.email ?? dn.email ?? '')
+        return (pid === pp.recordId) || (sid === pp.recordId) || (pem && pem === String(pp.recordId))
+      })
+    })
+  }, [list])
+
+  async function approveLocalProposal(pp: any, p: any) {
+    if (!p) return
+    const rowZone = String(p.zoneId ?? p.data?.zoneId ?? '')
+    const rowSchool = String(p.schoolId ?? p.data?.schoolId ?? '')
+    await login('Coach', rowZone, rowSchool)
+    const res = await putJson('players', p.id || '', { [pp.field]: pp.value, schoolId: rowSchool, zoneId: rowZone })
+    if (res) {
+      setProposalStatus('Player', pp.id, 'approved')
+      deleteProposal('Player', pp.id)
+      try { window.dispatchEvent(new CustomEvent('data:players:updated', { detail: { id: p.id || '' } })) } catch {}
+      await onRefresh()
+      return
+    }
+    alert('Could not apply change to server. Kept as pending.')
+  }
+
+  async function rejectLocalProposal(pp: any) {
+    setProposalStatus('Player', pp.id, 'rejected')
+    deleteProposal('Player', pp.id)
+    await onRefresh()
+  }
+  async function decideApproval(approvalId: string, status: 'approved' | 'rejected') {
+    const startTime = Date.now()
+    trackUserAction('decide_profile_update', 'pending_tab', { approvalId, status })
+    try {
+      const response = await fetch(apiUrl(`/approvals/${approvalId}/decision`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}`
+        },
+        body: JSON.stringify({ status })
+      })
+      trackApiCall(`/api/approvals/${approvalId}/decision`, 'POST', startTime, {
+        statusCode: response.status,
+        metadata: { approvalId, status }
+      })
+      if (response.ok) {
+        setPendingApprovals(prev => prev.filter(a => a.id !== approvalId))
+        await onRefresh()
+        trackPerformance('decide_profile_update', Date.now() - startTime, true, { approvalId, status })
+      } else {
+        trackError(`Failed to decide approval: ${response.status}`, 'decide_profile_update', undefined, { approvalId, status })
+      }
+    } catch (error: any) {
+      trackError(error.message, 'decide_profile_update', error.stack, { approvalId, status })
+    }
+  }
+
+  async function decideMigrationRequest(requestId: string, status: 'accepted' | 'rejected') {
+    const startTime = Date.now()
+    trackUserAction('decide_migration_request', 'pending_tab', { requestId, status })
+    try {
+      const response = await fetch(apiUrl(`/migration-requests/${requestId}/decision`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}`
+        },
+        body: JSON.stringify({ status })
+      })
+      trackApiCall(`/api/migration-requests/${requestId}/decision`, 'POST', startTime, {
+        statusCode: response.status,
+        metadata: { requestId, status }
+      })
+      if (response.ok) {
+        setPendingMigrationRequests((prev) => prev.filter((r: any) => String(r?.id || '') !== requestId))
+        await onRefresh()
+        trackPerformance('decide_migration_request', Date.now() - startTime, true, { requestId, status })
+      } else {
+        trackError(`Failed to decide migration request: ${response.status}`, 'decide_migration_request', undefined, { requestId, status })
+      }
+    } catch (error: any) {
+      trackError(error.message, 'decide_migration_request', error.stack, { requestId, status })
+    }
+  }
+
+  async function openMigrationDetail(requestId: string) {
+    setMigrationDetailOpen(true)
+    setMigrationDetailLoading(true)
+    setMigrationDetailErr('')
+    setMigrationDetail(null)
+    try {
+      const response = await fetch(apiUrl(`/migration-requests/${encodeURIComponent(requestId)}`), {
+        headers: { Authorization: `Bearer ${getToken()}` }
+      })
+      if (!response.ok) {
+        setMigrationDetailErr(`Failed to load request (${response.status})`)
+        return
+      }
+      const data = await response.json()
+      setMigrationDetail(data)
+    } catch (e: any) {
+      setMigrationDetailErr(String(e?.message || 'Failed to load request'))
+    } finally {
+      setMigrationDetailLoading(false)
+    }
+  }
+  const pendingApprovalPlayerIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const a of pendingApprovals) {
+      const pid = String(a?.player?.id || a?.entityId || '')
+      if (pid) s.add(pid)
+    }
+    return s
+  }, [pendingApprovals])
+  function isPending(p: any) {
+    const pid = p.id
+    const status = String(p.data?.status ?? p.status ?? '').toLowerCase()
+    const dn = p.data || {}
+    const sid = dn.serverId
+    const pem = String(p.email ?? dn.email ?? '')
+    const local = localPending.some((pp) => (pid === pp.recordId) || (sid === pp.recordId) || (pem && pem === String(pp.recordId)))
+    return status === 'pending' || pendingApprovalPlayerIds.has(String(pid || '')) || local
+  }
+  const recent = (() => {
+    try {
+      const v = localStorage.getItem('recent:player')
+      const o = v ? JSON.parse(v) : null
+      if (o && Number(Date.now() - (o.ts || 0)) < 15000) return o
+    } catch {}
+    return null
+  })()
+  function applyFilters(p: any) {
+    const dn = p.data || {}
+
+    // Apply pending filter
+    if (pendingOnly) {
+      if (!isPending(p)) return false
+    }
+
+    const q = query.trim().toLowerCase()
+    if (q) {
+      const hay = [
+        String(dn.name ?? p.name ?? ''),
+        String(dn.surname ?? p.surname ?? ''),
+        String(dn.team ?? ''),
+        String(dn.ageGroup ?? ''),
+        String(dn.position ?? ''),
+        String(dn.idNumber ?? p.idNumber ?? ''),
+        String(dn.email ?? p.email ?? ''),
+        String(dn.contactNumber ?? p.contactNumber ?? '')
+      ].join(' ').toLowerCase().replace(/\s+/g, ' ').trim()
+      const tokens = q.split(/\s+/).filter(Boolean)
+      for (const t of tokens) {
+        if (!hay.includes(t)) return false
+      }
+    }
+    
+    // Apply search filters
+    if (searchFilters.team) {
+      const t = String(dn.team || dn.ageGroup || '')
+      if (t !== searchFilters.team) return false
+    }
+    if (searchFilters.ageGroup) {
+      const ag = String(dn.ageGroup || '')
+      if (ag !== searchFilters.ageGroup) return false
+    }
+    if (searchFilters.position) {
+      const pos = String(dn.position || '')
+      if (pos !== searchFilters.position) return false
+    }
+    if (searchFilters.status !== 'all') {
+      const status = dn.status || 'approved'
+      if (status !== searchFilters.status) return false
+    }
+    
+    return true
+  }
+  const listFiltered = list.filter(applyFilters)
+  const listFilteredUniqueCount = useMemo(() => {
+    const seen = new Set<string>()
+    for (const p of listFiltered) {
+      const dn = p?.data || {}
+      const email = String(dn.email ?? p?.email ?? '').trim().toLowerCase()
+      const idNumber = String(dn.idNumber ?? p?.idNumber ?? '').trim().toLowerCase()
+      const serverId = String(dn.serverId ?? '').trim().toLowerCase()
+      const name = String(dn.name ?? p?.name ?? '').trim().toLowerCase()
+      const surname = String(dn.surname ?? p?.surname ?? '').trim().toLowerCase()
+      const dob = String(dn.dateOfBirth ?? p?.dateOfBirth ?? dn.dob ?? '').trim().toLowerCase()
+      const composite = [name, surname, dob].filter(Boolean).join('|')
+      const key = email
+        ? `email:${email}`
+        : idNumber
+          ? `id:${idNumber}`
+          : serverId
+            ? `sid:${serverId}`
+            : composite
+              ? `n:${composite}`
+              : `rid:${String(p?.id || '')}`
+      seen.add(key)
+    }
+    return seen.size
+  }, [listFiltered])
+  const listSorted = [...list].sort((a, b) => {
+    const ap = isPending(a)
+    const bp = isPending(b)
+    const ar = recent && ((a.id === recent.id) || (`${a.data?.name || ''} ${a.data?.surname || ''}`.trim() === `${recent.name} ${recent.surname}`.trim()))
+    const br = recent && ((b.id === recent.id) || (`${b.data?.name || ''} ${b.data?.surname || ''}`.trim() === `${recent.name} ${recent.surname}`.trim()))
+    if (ar && !br) return -2
+    if (!ar && br) return 2
+    if (ap && !bp) return -1
+    if (!ap && bp) return 1
+    return 0
+  })
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState({ name: '', surname: '', idNumber: '', phone: '', email: '' })
+  const [selected, setSelected] = useState<any | null>(null)
+  const [selectedMode, setSelectedMode] = useState<'edit' | 'docs'>('edit')
+  const [folderStats, setFolderStats] = useState<{ year: number; count: number } | null>(null)
+  const [showMigration, setShowMigration] = useState(false)
+  const noticeRef = useRef<string | null>(null)
+  const loadingPendingGuard = useRef(false)
+  const pendingSummary = useMemo(() => {
+    const registrationsCount = pendingPlayers.length
+    const updatesCount = pendingApprovals.length + localPending.length
+    const migrationCount = pendingMigrationRequests.length
+    const total = registrationsCount + updatesCount + migrationCount
+    const newestUpdateTs = Math.max(0, ...pendingApprovals.map((a: any) => Number(a?.updatedAt || a?.createdAt || 0)))
+    const newestRegTs = Math.max(0, ...pendingPlayers.map((pp: any) => Number(pp?.ts || pp?.updatedAt || pp?.createdAt || 0)))
+    const newestLocalTs = Math.max(0, ...localPending.map((pp) => Number(pp.ts || 0)))
+    const newestMigTs = Math.max(0, ...pendingMigrationRequests.map((r: any) => Number(r?.requestedAt || 0)))
+    const newestTs = Math.max(newestUpdateTs, newestRegTs, newestLocalTs, newestMigTs)
+    return { registrationsCount, updatesCount, migrationCount, total, newestTs }
+  }, [localPending, pendingApprovals, pendingMigrationRequests, pendingPlayers])
+  const migrationOutcomeSummary = useMemo(() => {
+    const count = migrationOutcomes.length
+    const newestTs = Math.max(0, ...migrationOutcomes.map((r: any) => Number(r?.decidedAt || 0)))
+    return { count, newestTs }
+  }, [migrationOutcomes])
+  const bannerMsg = useMemo(() => {
+    try {
+      const ackKey = `notify:coach:ackts:${schoolId}`
+      const ackTs = parseInt(localStorage.getItem(ackKey) || '0') || 0
+      const migAckKey = `notify:coach:ackts:migrationOutcomes:${schoolId}`
+      const migAckTs = parseInt(localStorage.getItem(migAckKey) || '0') || 0
+      const reviewKey = `notify:coach:lastReviewAt:${schoolId}`
+      const lastReviewAt = parseInt(localStorage.getItem(reviewKey) || '0') || 0
+      const now = Date.now()
+
+      if (activeTab === 'pending') return ''
+      const hasPending = pendingSummary.total > 0
+      const hasOutcomes = migrationOutcomeSummary.count > 0
+      if (!hasPending && !hasOutcomes) return ''
+      const pendingIsNew = pendingSummary.newestTs > 0 && pendingSummary.newestTs > ackTs
+      const outcomesAreNew = migrationOutcomeSummary.newestTs > 0 && migrationOutcomeSummary.newestTs > migAckTs
+      if (!pendingIsNew && !outcomesAreNew) return ''
+
+      const overDay = lastReviewAt > 0
+        ? (now - lastReviewAt) > 24 * 60 * 60 * 1000
+        : (pendingSummary.newestTs > 0 ? (now - pendingSummary.newestTs) > 24 * 60 * 60 * 1000 : false)
+      if (!overDay) return ''
+
+      if (!pendingIsNew && outcomesAreNew) {
+        return `You have ${migrationOutcomeSummary.count} migration update${migrationOutcomeSummary.count > 1 ? 's' : ''} (accepted/rejected)`
+      }
+
+      const parts = [] as string[]
+      if (pendingSummary.registrationsCount > 0) parts.push(`${pendingSummary.registrationsCount} registrations`)
+      if (pendingSummary.updatesCount > 0) parts.push(`${pendingSummary.updatesCount} profile updates`)
+      if (pendingSummary.migrationCount > 0) parts.push(`${pendingSummary.migrationCount} migrations`)
+      const suffix = parts.length ? ` (${parts.join(', ')})` : ''
+      return `You have ${pendingSummary.total} pending review${pendingSummary.total > 1 ? 's' : ''}${suffix}`
+    } catch {}
+    return ''
+  }, [activeTab, migrationOutcomeSummary.count, migrationOutcomeSummary.newestTs, pendingSummary.newestTs, pendingSummary.registrationsCount, pendingSummary.total, pendingSummary.updatesCount, schoolId])
+  async function addPlayer() {
+    const payload: any = {
+      name: form.name,
+      surname: form.surname,
+      idNumber: form.idNumber,
+      contactNumber: form.phone,
+      email: form.email,
+      schoolId,
+      zoneId: localStorage.getItem('auth:zoneId') || zone || '',
+      ageGroup: null,
+      dataOrigin: 'coach_add'
+    }
+    if (form.email && !isEmail(form.email)) return
+    if (form.phone && !isPhoneZA(form.phone)) return
+    if (form.idNumber && !isIdNumber(form.idNumber)) return
+    await login('Coach', payload.zoneId, payload.schoolId)
+    const res = await postJson('players', payload)
+    if (res) {
+      try {
+        const recent = { id: res.id || '', name: payload.name, surname: payload.surname, ts: Date.now() }
+        localStorage.setItem('recent:player', JSON.stringify(recent))
+      } catch {}
+      emitRowAdded('players', res)
+      setForm({ name: '', surname: '', idNumber: '', phone: '', email: '' })
+      setAdding(false)
+      await onRefresh()
+    }
+    else {
+      // Fallback: add locally so coach can see immediately
+      alert('Network or permission issue; added locally. Will sync when online.')
+    }
+  }
+  return (
+    <div>
+      {selected ? (
+        <CoachPlayerDetail player={selected} mode={selectedMode} onBack={() => setSelected(null)} onUpdated={onRefresh} />
+      ) : (
+      <div>
+      {/* Coach Header Card */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-700 via-blue-600 to-blue-500 text-white shadow-xl mb-6">
+        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4xIj48Y2lyY2xlIGN4PSIzMCIgY3k9IjMwIiByPSIyIi8+PC9nPjwvZz48L3N2Zz4=')] opacity-30"></div>
+        <div className="relative px-8 py-8">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <UserCheck className="h-8 w-8 text-blue-100" />
+                <span className="text-blue-100 text-sm font-medium uppercase tracking-wider">
+                  Team Management {assignedTeam ? `• ${assignedTeam}` : ''}
+                </span>
+              </div>
+              <h1 className="text-3xl font-bold mb-2">Welcome, {coachName || 'Coach'}</h1>
+              <div className="flex items-center gap-4 text-blue-100">
+                <span className="flex items-center gap-1">
+                  <School className="h-4 w-4" />
+                  {schoolName || 'No School'}
+                </span>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-4xl font-bold">{listFilteredUniqueCount}</div>
+              <div className="text-blue-100 text-sm">Active Players</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {bannerMsg && (
+        <div className="mb-6 rounded-md bg-blue-50 p-4 border border-blue-100 text-sm text-blue-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-5 w-5 text-blue-600" />
+            <span className="font-medium">{bannerMsg}</span>
+          </div>
+          <div className="flex gap-2">
+            <button className="rounded-md bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-700 transition-colors" onClick={() => {
+              setActiveTab('pending')
+            }}>Review Pending</button>
+            <button className="rounded-md border bg-white px-3 py-1.5 hover:bg-gray-50 text-gray-700" onClick={() => {
+              const first = pendingApprovals[0]
+              const pid = String(first?.player?.id || first?.entityId || '')
+              const p = pid ? list.find((x) => x.id === pid || x.data?.serverId === pid) : null
+              if (p) { setSelected(p); setSelectedMode('edit') }
+              else setActiveTab('pending')
+            }}>Open First Update</button>
+            <button className="rounded-md border bg-white px-3 py-1.5 hover:bg-gray-50 text-gray-700" onClick={() => {
+              try {
+                const ackKey = `notify:coach:ackts:${schoolId}`
+                localStorage.setItem(ackKey, String(pendingSummary.newestTs || Date.now()))
+                const migAckKey = `notify:coach:ackts:migrationOutcomes:${schoolId}`
+                localStorage.setItem(migAckKey, String(migrationOutcomeSummary.newestTs || Date.now()))
+                const reviewKey = `notify:coach:lastReviewAt:${schoolId}`
+                localStorage.setItem(reviewKey, String(Date.now()))
+              } catch {}
+            }}>Dismiss</button>
+          </div>
+        </div>
+      )}
+      
+      {/* Tab Navigation */}
+      <div className="border-b border-gray-200 mb-6">
+        <nav className="flex space-x-8">
+          <button 
+            className={`flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${activeTab === 'players' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+            onClick={() => setActiveTab('players')}
+          >
+            <Users className="h-4 w-4" />
+            Players ({hierView && folderStats ? folderStats.count : listFilteredUniqueCount})
+          </button>
+          {(role === 'Coach' || role === 'SchoolAdmin' || role === 'EPHSRUAdmin') && (
+            <button
+              className={`flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${activeTab === 'pending' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+              onClick={() => setActiveTab('pending')}
+            >
+              <AlertCircle className="h-4 w-4" />
+              Pending ({pendingSummary.total})
+            </button>
+          )}
+          {(role === 'EPHSRUAdmin' || role === 'SchoolAdmin') && (
+            <button 
+              className={`flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${activeTab === 'metrics' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+              onClick={() => setActiveTab('metrics')}
+            >
+              <Activity className="h-4 w-4" />
+              System Metrics
+            </button>
+          )}
+        </nav>
+      </div>
+      
+      {/* Pending Players Tab */}
+      {activeTab === 'pending' && (
+        <div className="space-y-3">
+          <div className="text-sm font-semibold">Registrations ({pendingSummary.registrationsCount})</div>
+          <PendingPlayersView 
+            players={pendingPlayers}
+            loading={loadingPending}
+            onApprove={approvePlayer}
+            onReject={rejectPlayer}
+            onBulkApprove={bulkApprovePlayers}
+            onRefresh={loadPending}
+          />
+          <div className="text-sm font-semibold">Profile Updates ({pendingSummary.updatesCount})</div>
+          <div className="rounded-lg border bg-white p-3 shadow">
+            <div className="divide-y">
+              {pendingApprovals.map((a: any) => {
+                const pid = String(a?.player?.id || a?.entityId || '')
+                const p = pid ? list.find((x) => x.id === pid || x.data?.serverId === pid) : null
+                const dn = p?.data || a?.player || {}
+                const firstChange = Array.isArray(a?.requestedChanges) ? a.requestedChanges[0] : null
+                const field = String(firstChange?.field || '')
+                const updated = firstChange?.updated
+                return (
+                  <div key={a.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                    <div>
+                      <span className="font-semibold">{dn.name} {dn.surname}</span>
+                      <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-300">Needs Review</span>
+                      {field && <span className="ml-2 text-gray-700">• {field}{typeof updated !== 'undefined' ? ` → ${String(updated)}` : ''}</span>}
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="rounded-md border px-2 py-1" onClick={() => { if (p) { setSelected(p); setSelectedMode('edit') } }}>Open</button>
+                      <button className="rounded-md bg-brand px-2 py-1 text-white" onClick={() => decideApproval(String(a.id), 'approved')}>Approve</button>
+                      <button className="rounded-md border px-2 py-1" onClick={() => decideApproval(String(a.id), 'rejected')}>Reject</button>
+                    </div>
+                  </div>
+                )
+              })}
+              {localPending.map((pp) => {
+                const p = list.find((x) => {
+                  const dn = x.data || {}
+                  const pid = x.id
+                  const sid = dn.serverId
+                  const pem = String(x.email ?? dn.email ?? '')
+                  return (pid === pp.recordId) || (sid === pp.recordId) || (pem && pem === String(pp.recordId))
+                })
+                const dn = p?.data || {}
+                return (
+                  <div key={pp.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                    <div>
+                      <span className="font-semibold">{dn.name} {dn.surname}</span>
+                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-700 ring-1 ring-gray-300">Offline</span>
+                      <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-300">Needs Review</span>
+                      <span className="ml-2 text-gray-700">• {pp.field} → {String(pp.value)}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="rounded-md border px-2 py-1" onClick={() => { if (p) { setSelected(p); setSelectedMode('edit') } }}>Open</button>
+                      <button className="rounded-md bg-brand px-2 py-1 text-white" onClick={() => approveLocalProposal(pp, p)}>Approve</button>
+                      <button className="rounded-md border px-2 py-1" onClick={() => rejectLocalProposal(pp)}>Reject</button>
+                    </div>
+                  </div>
+                )
+              })}
+              {pendingApprovals.length === 0 && localPending.length === 0 && (
+                <div className="py-2 text-sm text-gray-600">No profile update requests</div>
+              )}
+            </div>
+          </div>
+
+          <div className="text-sm font-semibold">Migration Requests ({pendingSummary.migrationCount})</div>
+          <div className="rounded-lg border bg-white p-3 shadow">
+            <div className="divide-y">
+              {pendingMigrationRequests.map((r: any) => {
+                const p = r?.player || {}
+                const fromSchoolId = String(r?.fromSchoolId || '')
+                const toSchoolId = String(r?.toSchoolId || '')
+                return (
+                  <div key={String(r?.id || '')} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                    <div>
+                      <span className="font-semibold">{String(p.name || '')} {String(p.surname || '')}</span>
+                      <span className="ml-2 text-gray-700">• {fromSchoolId} → {toSchoolId}</span>
+                      <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-300">Needs Review</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="rounded-md border px-2 py-1" onClick={() => openMigrationDetail(String(r.id))}>View</button>
+                      <button className="rounded-md bg-brand px-2 py-1 text-white" onClick={() => decideMigrationRequest(String(r.id), 'accepted')}>Accept</button>
+                      <button className="rounded-md border px-2 py-1" onClick={() => decideMigrationRequest(String(r.id), 'rejected')}>Reject</button>
+                    </div>
+                  </div>
+                )
+              })}
+              {pendingMigrationRequests.length === 0 && (
+                <div className="py-2 text-sm text-gray-600">No migration requests</div>
+              )}
+            </div>
+          </div>
+
+          <div className="text-sm font-semibold">Migration Outcomes ({migrationOutcomes.length})</div>
+          <div className="rounded-lg border bg-white p-3 shadow">
+            <div className="divide-y">
+              {migrationOutcomes.map((r: any) => {
+                const p = r?.player || {}
+                const fromSchoolId = String(r?.fromSchoolId || '')
+                const toSchoolId = String(r?.toSchoolId || '')
+                const status = String(r?.status || '')
+                const decidedAt = Number(r?.decidedAt || 0)
+                return (
+                  <div key={String(r?.id || '')} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                    <div>
+                      <span className="font-semibold">{String(p.name || '')} {String(p.surname || '')}</span>
+                      <span className="ml-2 text-gray-700">• {fromSchoolId} → {toSchoolId}</span>
+                      <span className={status === 'accepted' ? 'ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700 ring-1 ring-green-300' : 'ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-300'}>
+                        {status || '—'}
+                      </span>
+                      {decidedAt > 0 && <span className="ml-2 text-xs text-gray-600">{new Date(decidedAt).toLocaleString()}</span>}
+                    </div>
+                  </div>
+                )
+              })}
+              {migrationOutcomes.length === 0 && (
+                <div className="py-2 text-sm text-gray-600">No migration outcomes</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {migrationDetailOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Migration request details">
+          <div className="w-full max-w-2xl rounded-md bg-white p-4 shadow-lg">
+            <div className="flex items-center justify-between">
+              <div className="text-base font-semibold">Migration Request</div>
+              <button className="rounded-md border px-3 py-2 text-sm" onClick={() => setMigrationDetailOpen(false)} type="button">Close</button>
+            </div>
+            {migrationDetailLoading && <div className="mt-2 text-sm text-gray-600">Loading…</div>}
+            {migrationDetailErr && <div className="mt-2 rounded-md border border-red-300 bg-red-50 p-2 text-sm text-red-700">{migrationDetailErr}</div>}
+            {(!migrationDetailLoading && !migrationDetailErr && migrationDetail) && (
+              <div className="mt-3 space-y-3">
+                <div className="rounded-md bg-gray-50 p-3">
+                  <div className="text-sm font-semibold">Player</div>
+                  <div className="mt-2 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                    <div><span className="text-gray-600">Name:</span> <span className="font-medium">{String(migrationDetail?.player?.name || '')} {String(migrationDetail?.player?.surname || '')}</span></div>
+                    <div><span className="text-gray-600">ID Number:</span> <span className="font-medium">{String(migrationDetail?.player?.idNumber || '—')}</span></div>
+                    <div><span className="text-gray-600">Email:</span> <span className="font-medium">{String(migrationDetail?.player?.email || '—')}</span></div>
+                    <div><span className="text-gray-600">Contact:</span> <span className="font-medium">{String(migrationDetail?.player?.contactNumber || '—')}</span></div>
+                    <div><span className="text-gray-600">Gender:</span> <span className="font-medium">{String(migrationDetail?.player?.gender || '—')}</span></div>
+                    <div><span className="text-gray-600">Age group:</span> <span className="font-medium">{String(migrationDetail?.player?.ageGroup || '—')}</span></div>
+                  </div>
+                </div>
+                <div className="rounded-md border p-3">
+                  <div className="text-sm font-semibold">Transfer</div>
+                  <div className="mt-2 text-sm text-gray-700">From <span className="font-medium">{String(migrationDetail?.fromSchoolId || '')}</span> to <span className="font-medium">{String(migrationDetail?.toSchoolId || '')}</span></div>
+                  <div className="mt-1 text-sm text-gray-700">Reason: <span className="font-medium">{String(migrationDetail?.reason || '') || '—'}</span></div>
+                  <div className="mt-1 text-xs text-gray-600">Requested by: {String(migrationDetail?.requesterRole || '') || '—'} {String(migrationDetail?.requesterEmail || '') || ''}</div>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <button className="rounded-md bg-brand px-3 py-2 text-sm text-white" type="button" onClick={() => { setMigrationDetailOpen(false); decideMigrationRequest(String(migrationDetail?.id || ''), 'accepted') }}>Accept</button>
+                  <button className="rounded-md border px-3 py-2 text-sm" type="button" onClick={() => { setMigrationDetailOpen(false); decideMigrationRequest(String(migrationDetail?.id || ''), 'rejected') }}>Reject</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Metrics Tab */}
+      {activeTab === 'metrics' && (
+        <MetricsDashboard />
+      )}
+      
+      {/* Players Tab */}
+      {activeTab === 'players' && (
+      <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex items-center rounded-full bg-brand/10 px-3 py-1 text-sm font-semibold text-brand ring-1 ring-brand/30 shadow-sm">
+          <Users size={16} className="mr-1" />
+          <span>{hierView && folderStats ? folderStats.count : listFilteredUniqueCount}</span>
+        </div>
+        {hierView && folderStats && (
+          <div className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700 ring-1 ring-gray-300">Year: {folderStats.year}</div>
+        )}
+        <button className="rounded-md border px-3 py-2" onClick={() => setActiveTab('pending')}>Review</button>
+        <div className="inline-flex overflow-hidden rounded-md border">
+          <button
+            className={`px-3 py-2 text-sm ${hierView ? 'bg-gray-100 font-semibold' : ''}`}
+            onClick={() => setHierView(true)}
+            type="button"
+          >
+            Browse
+          </button>
+          <button
+            className={`px-3 py-2 text-sm ${!hierView ? 'bg-gray-100 font-semibold' : ''}`}
+            onClick={() => setHierView(false)}
+            type="button"
+          >
+            Search
+          </button>
+        </div>
+        {(role === 'Coach' || role === 'SchoolAdmin' || role === 'EPHSRUAdmin') && (
+          <button className={`rounded-md px-3 py-2 ${showMigration ? 'bg-blue-600 text-white' : 'border'}`} onClick={() => setShowMigration((v) => !v)}>{showMigration ? 'Close Migration' : 'Migrate Player'}</button>
+        )}
+        <button className="rounded-md bg-brand px-3 py-2 text-white" onClick={() => setAdding((v) => !v)}>{adding ? 'Cancel' : 'Add Player'}</button>
+      </div>
+
+      {showMigration && (
+        <div className="mb-3">
+          <PlayerMigrationPanel onDone={onRefresh} />
+        </div>
+      )}
+      
+      {!hierView && (
+        <div className="mb-3">
+          <SearchBar
+            onSearch={(searchQuery, filters) => {
+              const startTime = Date.now()
+              setQuery(searchQuery)
+              setSearchFilters(filters)
+              trackUserAction('search_players', 'search_bar', searchQuery, filters)
+              if (searchQuery.trim()) {
+                const next = [searchQuery.trim(), ...history.filter((h) => h !== searchQuery.trim())].slice(0, 6)
+                setHistory(next)
+                try { localStorage.setItem('coach:search:history', JSON.stringify(next)) } catch {}
+              }
+              trackPerformance('search_operation', Date.now() - startTime, true, {
+                query: searchQuery,
+                filters
+              })
+            }}
+            suggestions={suggestions}
+            searchHistory={history}
+            onClearHistory={() => {
+              trackUserAction('clear_search_history', 'search_bar')
+              setHistory([])
+              try { localStorage.removeItem('coach:search:history') } catch {}
+            }}
+            placeholder="Search players by name, team, or position..."
+            showFilters={true}
+            filters={searchFilters}
+            onFilterChange={(filters) => {
+              trackUserAction('change_search_filters', 'search_bar', undefined, filters)
+              setSearchFilters(filters)
+            }}
+          />
+        </div>
+      )}
+
+      {!hierView && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={pendingOnly} onChange={(e) => setPendingOnly(e.target.checked)} />
+            Show only players needing review
+          </label>
+          <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Player view">
+            <button
+              type="button"
+              aria-label="List view"
+              aria-pressed={resultsView === 'list'}
+              className={`inline-flex items-center gap-1 px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 ${resultsView === 'list' ? 'bg-brand text-white' : ''}`}
+              onClick={() => {
+                if (resultsView === 'list') return
+                setResultsSwitching(true)
+                setTimeout(() => { setResultsView('list'); setResultsSwitching(false) }, 120)
+              }}
+            >
+              <ListIcon size={16} aria-hidden="true" />
+              List
+            </button>
+            <button
+              type="button"
+              aria-label="Card view"
+              aria-pressed={resultsView === 'cards'}
+              className={`inline-flex items-center gap-1 px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 ${resultsView === 'cards' ? 'bg-brand text-white' : ''}`}
+              onClick={() => {
+                if (resultsView === 'cards') return
+                setResultsSwitching(true)
+                setTimeout(() => { setResultsView('cards'); setResultsSwitching(false) }, 120)
+              }}
+            >
+              <LayoutGrid size={16} aria-hidden="true" />
+              Cards
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {adding && (
+        <div className="mb-3 rounded-md border p-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="block"><span className="text-sm font-medium">Name</span><input className="mt-1 w-full rounded-md border p-2" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+            <label className="block"><span className="text-sm font-medium">Surname</span><input className="mt-1 w-full rounded-md border p-2" value={form.surname} onChange={(e) => setForm({ ...form, surname: e.target.value })} /></label>
+            <label className="block"><span className="text-sm font-medium">ID/Passport</span><input className="mt-1 w-full rounded-md border p-2" value={form.idNumber} onChange={(e) => setForm({ ...form, idNumber: e.target.value })} /></label>
+            <label className="block"><span className="text-sm font-medium">Mobile</span><input className="mt-1 w-full rounded-md border p-2" placeholder="+27" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
+            <label className="block sm:col-span-2"><span className="text-sm font-medium">Email</span><input type="email" className="mt-1 w-full rounded-md border p-2" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
+          </div>
+          <div className="mt-3 text-right"><button className="rounded-md bg-brand px-3 py-2 text-white" onClick={addPlayer}>Save Player</button></div>
+        </div>
+      )}
+      {hierView ? (
+        <CoachFolderBrowser
+          players={list}
+          onSelect={(p) => { setSelected(p); setSelectedMode('edit') }}
+          currentYearOnly={false}
+          onStats={setFolderStats}
+          viewMode={resultsView}
+          onViewModeChange={setResultsView}
+        />
+      ) : (
+        <div className={`rounded-lg border bg-white p-3 shadow transition-opacity duration-150 ${resultsSwitching ? 'opacity-0' : 'opacity-100'}`}>
+          {listFiltered.length === 0 && (
+            <div className="py-2 text-sm text-gray-600">
+              <div className="font-semibold">No matches</div>
+              <div className="mt-1">Try clearing filters or switching view.</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button className="rounded-md border px-2 py-1" onClick={() => { setQuery(''); setPendingOnly(false); setTeamFilter(''); setAgeFilter(''); setSearchFilters({ team: '', ageGroup: '', position: '', status: 'all' }) }}>Clear filters</button>
+                <button className="rounded-md border px-2 py-1" onClick={() => setHierView(true)}>Browse instead</button>
+              </div>
+            </div>
+          )}
+
+          {listFiltered.length > 0 && resultsView === 'list' && (
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full border-separate border-spacing-0 text-sm">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Team</th>
+                    <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Name</th>
+                    <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Surname</th>
+                    <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold hidden sm:table-cell">Age Group</th>
+                    <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {listFiltered.sort((a, b) => {
+                    const ai = listSorted.findIndex((x) => x.id === a.id)
+                    const bi = listSorted.findIndex((x) => x.id === b.id)
+                    return ai - bi
+                  }).map((p) => {
+                    const dn = p.data || {}
+                    const t = String(dn.team || dn.ageGroup || '') || '—'
+                    const needsReview = isPending(p)
+                    return (
+                      <tr key={p.id || dn.serverId || dn.idNumber} className={`cursor-pointer hover:bg-gray-50 ${needsReview ? 'bg-red-50' : ''}`} onClick={() => { setSelected(p); setSelectedMode('edit') }}>
+                        <td className="border-b px-3 py-2">{t}</td>
+                        <td className="border-b px-3 py-2">{dn.name}</td>
+                        <td className="border-b px-3 py-2">{dn.surname}</td>
+                        <td className="border-b px-3 py-2 hidden sm:table-cell">{dn.ageGroup || t}</td>
+                        <td className="border-b px-3 py-2">{needsReview ? 'Needs review' : 'Approved'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {listFiltered.length > 0 && resultsView === 'cards' && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              {listFiltered.sort((a, b) => {
+                const ai = listSorted.findIndex((x) => x.id === a.id)
+                const bi = listSorted.findIndex((x) => x.id === b.id)
+                return ai - bi
+              }).map((p) => (
+                <PlayerCard
+                  key={p.id || p.data?.serverId || p.data?.idNumber}
+                  player={p}
+                  badge={String(p.data?.ageGroup || p.data?.team || '—')}
+                  onClick={() => { setSelected(p); setSelectedMode('edit') }}
+                />
+              ))}
+            </div>
+          )}
+
+          {list.length === 0 && (
+            <div className="py-2 text-sm text-gray-500">
+              <div className="font-semibold">No players yet</div>
+              <div className="mt-1">Add a player to get started.</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button className="rounded-md bg-brand px-2 py-1 text-white" onClick={() => setAdding(true)}>Add Player</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      </div>
+      )}
+    </div>
+    )}
+    </div>
+  )
+}
+
+function CoachPlayerRow({ player, hasPending, isRecent, onUpdated, onSelect }) {
+  const d = player.data || {}
+  const [showDocs, setShowDocs] = useState(false)
+  const [docs, setDocs] = useState<any[]>([])
+  const [preview, setPreview] = useState<string | null>(null)
+  const photo = typeof d.photoUrl === 'string' && d.photoUrl.startsWith('/uploads') ? `${API_ORIGIN}${d.photoUrl}` : (d.photoUrl || '')
+  const initials = ((d.name || '').charAt(0) + (d.surname || '').charAt(0)).toUpperCase() || 'P'
+  return (
+    <div className="text-sm">
+        <div className={`rounded-md border p-3 shadow-sm transition hover:shadow ${hasPending ? 'border-l-4 border-red-500 bg-red-50 ring-1 ring-red-300' : ''}`} data-player-id={player.id || d.serverId || ''} data-player-name={`${d.name || ''} ${d.surname || ''}`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {photo ? (
+                <img src={photo} alt="Profile" className={`h-20 w-20 rounded-full object-cover ${hasPending ? 'ring-2 ring-red-300' : ''}`} onDoubleClick={() => setPreview(photo)} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
+              ) : (
+                <div className={`flex h-20 w-20 items-center justify-center rounded-full ${hasPending ? 'bg-red-100 text-red-700 ring-2 ring-red-300' : 'bg-brand/10 text-brand ring-1 ring-brand/30'}`}>{initials}</div>
+              )}
+              <div>
+                <div className={`text-base font-semibold ${hasPending ? 'text-red-600' : ''}`}>
+                  {d.name} {d.surname}
+                  {hasPending && <span className="ml-2 inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-300">Needs Review</span>}
+                  {isRecent && <span className="ml-2 inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-blue-300">Recently Added</span>}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <span className="inline-flex items-center rounded-full bg-brand/10 px-2 py-0.5 text-xs font-semibold text-brand ring-1 ring-brand/30">{d.position || 'Position —'}</span>
+                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 ring-1 ring-gray-300">{d.ageGroup || 'Age Group —'}</span>
+                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 ring-1 ring-gray-300">{d.schoolId || player.schoolId || 'School —'}</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button className="rounded-md border px-3 py-1" onClick={() => onSelect('docs')}>View Documents</button>
+              {hasPending ? (
+                <button className="rounded-md bg-red-600 px-3 py-1 text-white" onClick={() => onSelect('edit')}>Review</button>
+              ) : (
+                <button className="rounded-md bg-brand px-3 py-1 text-white" onClick={() => onSelect('edit')}>Edit</button>
+              )}
+            </div>
+          </div>
+        </div>
+        {preview && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={() => setPreview(null)}>
+            <img src={preview} alt="Preview" className="max-h-[95vh] max-w-[98vw] rounded-md shadow-lg" style={{ transform: 'scale(2)' }} />
+          </div>
+        )}
+    </div>
+  )
+}
+function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewMode, onViewModeChange }: { players: any[]; onSelect: (p: any) => void; currentYearOnly?: boolean; onStats?: (stats: { year: number; count: number }) => void; viewMode: 'cards' | 'list'; onViewModeChange: (next: 'cards' | 'list') => void }) {
+  const systemYear = new Date().getFullYear()
+  const yearTouchedRef = useRef(false)
+  function inferYearFromTs(rawTs: any) {
+    if (rawTs === undefined || rawTs === null || rawTs === '') return null
+    let n = typeof rawTs === 'number' ? rawTs : Number(rawTs)
+    if (!Number.isFinite(n) || n <= 0) return null
+    if (n < 1_000_000_000_000) n = n * 1000
+    try {
+      const y = new Date(n).getFullYear()
+      return Number.isFinite(y) ? y : null
+    } catch {
+      return null
+    }
+  }
+  function registrationYearOf(p: any) {
+    const dn = p?.data || {}
+    const direct = Number(dn.registrationYear ?? dn.registration_year ?? dn.regYear ?? dn.reg_year)
+    if (Number.isFinite(direct) && direct > 2000) return direct
+    const y1 = inferYearFromTs(dn.registeredAt)
+    if (y1) return y1
+    const y2 = inferYearFromTs(p?.createdAt ?? p?.data?.createdAt)
+    if (y2) return y2
+    const y3 = inferYearFromTs(p?.ts ?? p?.updatedAt ?? p?.data?.ts)
+    if (y3) return y3
+    return systemYear
+  }
+  function registrationTsOf(p: any) {
+    const dn = p?.data || {}
+    const rt = dn.registeredAt
+    const t = typeof rt === 'number' ? rt : Number(rt)
+    if (Number.isFinite(t) && t > 0) return t
+    const raw = p?.createdAt ?? p?.data?.createdAt
+    const c = typeof raw === 'number' ? raw : Number(raw)
+    if (Number.isFinite(c) && c > 0) return c
+    const raw2 = p?.ts ?? p?.updatedAt ?? p?.data?.ts
+    const u = typeof raw2 === 'number' ? raw2 : Number(raw2)
+    return Number.isFinite(u) && u > 0 ? u : 0
+  }
+  const yearsPresent = useMemo(() => {
+    const set = new Set<number>()
+    ;(Array.isArray(players) ? players : []).forEach((p) => {
+      const y = registrationYearOf(p)
+      if (y) set.add(y)
+    })
+    return Array.from(set)
+  }, [players])
+  const basePlayers = useMemo(() => {
+    if (!currentYearOnly) return players
+    return (Array.isArray(players) ? players : []).filter((p) => registrationYearOf(p) === systemYear)
+  }, [players, currentYearOnly, systemYear])
+  const [yearSel, setYearSel] = useState<number>(systemYear)
+  const [genderSel, setGenderSel] = useState<string | null>(null)
+  const [teamSel, setTeamSel] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [switching, setSwitching] = useState(false)
+  const cache = useRef<Map<string, any[]>>(new Map())
+  useEffect(() => { cache.current.clear() }, [players, yearSel])
+  function normalizeGender(p: any) {
+    const dn = p?.data || {}
+    const rawGender = String(dn.gender || '').toLowerCase()
+    const rawTeam = String(dn.team || dn.ageGroup || '').toLowerCase()
+    if (rawGender.includes('female') || rawGender.includes('girl')) return 'Girls'
+    if (rawGender.includes('male') || rawGender.includes('boy')) return 'Boys'
+    if (rawTeam.includes('girls')) return 'Girls'
+    if (rawTeam.includes('boys')) return 'Boys'
+    return 'Unspecified'
+  }
+  useEffect(() => {
+    if (yearTouchedRef.current) return
+    setYearSel(systemYear)
+  }, [systemYear])
+  const years = useMemo(() => {
+    const base = [systemYear - 2, systemYear - 1, systemYear]
+    const set = new Set<number>(base)
+    yearsPresent.forEach((y) => { if (y <= systemYear) set.add(y) })
+    return Array.from(set).sort((a, b) => a - b)
+  }, [systemYear, yearsPresent])
+  function promoteGroup(v: string, steps: number) {
+    if (!v || steps <= 0) return v
+    let out = v
+    for (let i = 0; i < steps; i++) {
+      if (out === 'U15') out = 'U16'
+      else if (out === 'U16') out = 'U17'
+      else if (out === 'U17') out = 'U19'
+      else if (out === 'U19') out = 'U19'
+      else out = out
+    }
+    return out
+  }
+  function identityKey(p: any) {
+    const dn = p?.data || {}
+    const email = String(dn.email ?? p?.email ?? '').trim().toLowerCase()
+    if (email) return `email:${email}`
+    const idNumber = String(dn.idNumber ?? p?.idNumber ?? '').trim().toLowerCase()
+    if (idNumber) return `id:${idNumber}`
+    const serverId = String(dn.serverId ?? '').trim().toLowerCase()
+    if (serverId) return `sid:${serverId}`
+    const name = String(dn.name ?? '').trim().toLowerCase()
+    const surname = String(dn.surname ?? '').trim().toLowerCase()
+    const dob = String(dn.dob ?? '').trim().toLowerCase()
+    const composite = [name, surname, dob].filter(Boolean).join('|')
+    return composite ? `n:${composite}` : ''
+  }
+  const playersForSelectedYear = useMemo(() => {
+    if (!Array.isArray(basePlayers) || basePlayers.length === 0) return []
+
+    const bestAnchorByKey = new Map<string, any>()
+    basePlayers.forEach((p) => {
+      const k = identityKey(p) || String(p?.id || '')
+      if (!k) return
+      const ry = registrationYearOf(p)
+      const prev = bestAnchorByKey.get(k)
+      if (!prev) {
+        bestAnchorByKey.set(k, p)
+        return
+      }
+      const pry = registrationYearOf(prev)
+      if (ry < pry) {
+        bestAnchorByKey.set(k, p)
+        return
+      }
+      if (ry === pry) {
+        const pts = registrationTsOf(prev)
+        const nts = registrationTsOf(p)
+        if (nts && pts && nts < pts) bestAnchorByKey.set(k, p)
+      }
+    })
+
+    const anchors = Array.from(bestAnchorByKey.values()).filter((p) => registrationYearOf(p) <= yearSel)
+    return anchors.map((p) => {
+      const baseYear = registrationYearOf(p)
+      const diff = Math.max(0, yearSel - baseYear)
+      if (diff <= 0) return p
+      const dn = p?.data || {}
+      const ageGroup = String(dn.ageGroup || '')
+      const team = String(dn.team || dn.ageGroup || '')
+      const nextAgeGroup = promoteGroup(ageGroup, diff)
+      const nextTeam = promoteGroup(team, diff)
+      if (nextAgeGroup === ageGroup && nextTeam === team) return p
+      return { ...p, data: { ...dn, ageGroup: nextAgeGroup || dn.ageGroup, team: nextTeam || dn.team } }
+    })
+  }, [basePlayers, systemYear, yearSel])
+  useEffect(() => {
+    onStats?.({ year: yearSel, count: playersForSelectedYear.length })
+  }, [onStats, playersForSelectedYear.length, yearSel])
+  const makeKey = (a?: string|number|null,b?: string|number|null,c?: string|number|null) => [a ?? '', b ?? '', c ?? ''].join('|')
+  const genders = useMemo(() => {
+    const key = makeKey('genders', yearSel, null)
+    if (cache.current.has(key)) return cache.current.get(key) || []
+    const set = new Map<string, number>()
+    playersForSelectedYear.forEach((p) => {
+      const g = normalizeGender(p)
+      set.set(g, (set.get(g) || 0) + 1)
+    })
+    const arr = Array.from(set.entries()).map(([name, count]) => ({ name, count }))
+    cache.current.set(key, arr)
+    return arr
+  }, [playersForSelectedYear, yearSel])
+  const teams = useMemo(() => {
+    if (!genderSel) return []
+    const key = makeKey('teams', yearSel, genderSel)
+    if (cache.current.has(key)) return cache.current.get(key) || []
+    const set = new Map<string, number>()
+    playersForSelectedYear.filter((p) => normalizeGender(p) === genderSel).forEach((p) => {
+      const dn = p.data || {}
+      const t = String(dn.team || dn.ageGroup || '') || 'Unassigned'
+      set.set(t, (set.get(t) || 0) + 1)
+    })
+    const arr = Array.from(set.entries()).map(([name, count]) => ({ name, count }))
+    cache.current.set(key, arr)
+    return arr
+  }, [playersForSelectedYear, yearSel, genderSel])
+  const finalPlayers = useMemo(() => {
+    if (!genderSel || !teamSel) return []
+    const key = makeKey('players', yearSel, `${genderSel}|${teamSel}|${search.toLowerCase().trim()}`)
+    if (cache.current.has(key)) return cache.current.get(key) || []
+    const needle = search.toLowerCase().trim()
+    const arr = playersForSelectedYear.filter((p) => {
+      if (normalizeGender(p) !== genderSel) return false
+      const dn = p.data || {}
+      const t = String(dn.team || dn.ageGroup || '') || 'Unassigned'
+      if (t !== teamSel) return false
+      if (!needle) return true
+      const full = `${dn.name || ''} ${dn.surname || ''}`.toLowerCase()
+      return full.includes(needle)
+    })
+    cache.current.set(key, arr)
+    return arr
+  }, [playersForSelectedYear, yearSel, genderSel, teamSel, search])
+  const level = genderSel ? (teamSel ? 'players' : 'team') : 'gender'
+  const items = level === 'gender' ? genders : teams
+  const filteredItems = items.filter((it: any) => it.name.toLowerCase().includes(search.toLowerCase()))
+  return (
+    <div className="rounded-lg border bg-white p-3 shadow">
+      <div className="mb-3 flex flex-wrap gap-2" data-folder-level="year">
+        {years.map((y) => (
+          <button
+            key={y}
+            className={y === yearSel ? 'rounded-full bg-brand px-3 py-1 text-sm font-semibold text-white' : 'rounded-full border px-3 py-1 text-sm'}
+            onClick={() => {
+              if (y !== yearSel) {
+                yearTouchedRef.current = true
+                setYearSel(y)
+                setGenderSel(null)
+                setTeamSel(null)
+                setSearch('')
+              }
+            }}
+            aria-current={y === yearSel ? 'true' : undefined}
+          >
+            {y}
+          </button>
+        ))}
+      </div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-semibold">
+          <span className="underline cursor-pointer" onClick={() => { setGenderSel(null); setTeamSel(null) }}>Teams</span>
+          <> / <span className="underline cursor-pointer" onClick={() => { setGenderSel(null); setTeamSel(null) }}>{yearSel}</span></>
+          {genderSel && <> / <span className="underline cursor-pointer" onClick={() => { setTeamSel(null) }}>{genderSel}</span></>}
+          {teamSel && <> / <span className="underline">{teamSel}</span></>}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="w-40 rounded-md border p-2 text-sm sm:w-56" placeholder="Filter..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          {level === 'players' && (
+            <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Player view">
+              <button
+                type="button"
+                aria-label="Card view"
+                aria-pressed={viewMode === 'cards'}
+                className={`inline-flex items-center gap-1 px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 ${viewMode === 'cards' ? 'bg-brand text-white' : ''}`}
+                onClick={() => {
+                  if (viewMode === 'cards') return
+                  setSwitching(true)
+                  setTimeout(() => { onViewModeChange('cards'); setSwitching(false) }, 120)
+                }}
+              >
+                <LayoutGrid size={16} aria-hidden="true" />
+                Cards
+              </button>
+              <button
+                type="button"
+                aria-label="List view"
+                aria-pressed={viewMode === 'list'}
+                className={`inline-flex items-center gap-1 px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 ${viewMode === 'list' ? 'bg-brand text-white' : ''}`}
+                onClick={() => {
+                  if (viewMode === 'list') return
+                  setSwitching(true)
+                  setTimeout(() => { onViewModeChange('list'); setSwitching(false) }, 120)
+                }}
+              >
+                <ListIcon size={16} aria-hidden="true" />
+                List
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      {level !== 'players' ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4" data-folder-level={level}>
+          {filteredItems.map((it: any) => (
+            <button key={it.name} data-folder-item="folder" className="flex items-center justify-between rounded-md border p-3 text-left hover:bg-gray-50 transition" onClick={() => {
+              if (level === 'gender') setGenderSel(it.name)
+              else setTeamSel(it.name)
+            }}>
+              <div>
+                <div className="text-sm font-semibold">{it.name}</div>
+                <div className="text-xs text-gray-600">Items: {it.count}</div>
+              </div>
+              <div className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 ring-1 ring-gray-300">{it.count}</div>
+            </button>
+          ))}
+          {filteredItems.length === 0 && <div className="py-2 text-sm text-gray-600">No folders</div>}
+        </div>
+      ) : (
+        <div className={`transition-opacity duration-150 ${switching ? 'opacity-0' : 'opacity-100'}`}>
+          {viewMode === 'list' ? (
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full border-separate border-spacing-0 text-sm" aria-label="Players list">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Name</th>
+                    <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Surname</th>
+                    <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold hidden sm:table-cell">Position</th>
+                    <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold hidden md:table-cell">School</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {finalPlayers.map((p) => {
+                    const d = p.data || {}
+                    return (
+                      <tr key={p.id} className="hover:bg-gray-50">
+                        <td className="border-b px-3 py-2">
+                          <button type="button" className="w-full text-left" onClick={() => onSelect(p)} aria-label={`Open ${d.name || ''} ${d.surname || ''}`}>{d.name}</button>
+                        </td>
+                        <td className="border-b px-3 py-2">{d.surname}</td>
+                        <td className="border-b px-3 py-2 hidden sm:table-cell">{String(d.position || '—')}</td>
+                        <td className="border-b px-3 py-2 hidden md:table-cell">{String(d.schoolId || '')}</td>
+                      </tr>
+                    )
+                  })}
+                  {finalPlayers.length === 0 && (
+                    <tr>
+                      <td className="px-3 py-3 text-gray-600" colSpan={4}>No players</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              {finalPlayers.map((p) => (
+                <PlayerCard
+                  key={p.id}
+                  player={p}
+                  badge={String(p.data?.ageGroup || p.data?.team || '—')}
+                  onClick={() => onSelect(p)}
+                />
+              ))}
+              {finalPlayers.length === 0 && <div className="py-2 text-sm text-gray-600">No players</div>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CoachPlayerDetail({ player, mode, onBack, onUpdated }: { player: any; mode: 'edit' | 'docs'; onBack: () => void; onUpdated: () => void }) {
+  const d = player.data || {}
+  const initials = (((d.name || '').charAt(0) + (d.surname || '').charAt(0)).toUpperCase() || 'P')
+  const photo = typeof d.photoUrl === 'string' && d.photoUrl.startsWith('/uploads') ? `${API_ORIGIN}${d.photoUrl}` : (d.photoUrl || '')
+  const [showMigrate, setShowMigrate] = useState(false)
+  const proposals = getProposals('Player').filter((pp) => {
+    const pid = player.id || ''
+    const sid = (player.data?.serverId || '') as string
+    const pem = String(player.email ?? player.data?.email ?? '')
+    return (pp.recordId === pid) || (sid && pp.recordId === sid) || (pem && String(pp.recordId) === pem)
+  })
+  const [preview, setPreview] = useState<string | null>(null)
+  const [actionsOpen, setActionsOpen] = useState(false)
+  const [showEdit, setShowEdit] = useState(false)
+  const [showApprovals, setShowApprovals] = useState(false)
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-2">
+        <button className="flex items-center gap-1 rounded-md px-2 py-1 text-sm hover:bg-gray-100" onClick={onBack}>
+          <ChevronDown className="rotate-90" size={16} /> Back
+        </button>
+      </div>
+
+      {/* Profile Header Card */}
+      <div className="relative rounded-2xl bg-white shadow-sm ring-1 ring-gray-200">
+        <div className="h-32 rounded-t-2xl bg-gradient-to-r from-blue-700 to-blue-500"></div>
+        <div className="px-6 pb-6">
+          <div className="relative flex items-end justify-between -mt-12">
+            <div className="flex items-end gap-4">
+              <div className="relative rounded-full ring-4 ring-white bg-white p-1 shadow-sm">
+                {photo ? (
+                  <img src={photo} alt="Profile" className="h-24 w-24 rounded-full object-cover" onDoubleClick={() => setPreview(photo)} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
+                ) : (
+                  <div className="flex h-24 w-24 items-center justify-center rounded-full bg-gray-100 text-3xl font-bold text-gray-400">
+                    {initials}
+                  </div>
+                )}
+              </div>
+              <div className="mb-1 hidden sm:block">
+                <h1 className="text-2xl font-bold text-gray-900">{d.name} {d.surname}</h1>
+                <div className="flex items-center gap-2 text-gray-600 text-sm">
+                  <School size={16} /> <span>{d.schoolId || 'No School Assigned'}</span>
+                  {d.zoneId && <span className="text-gray-300">•</span>}
+                  {d.zoneId && <span>{d.zoneId}</span>}
+                </div>
+              </div>
+            </div>
+            
+            <div className="mb-2 flex items-center gap-2">
+              <div className="relative">
+                <button className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand focus:ring-offset-2" type="button" onClick={() => setActionsOpen((v) => !v)}>
+                  <MoreVertical size={16} />
+                  <span>Actions</span>
+                  <ChevronDown size={16} className={`transition-transform ${actionsOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {actionsOpen && (
+                  <div className="absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-lg border border-gray-100 bg-white p-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                    <button className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50" onClick={() => { setShowEdit((v) => !v); setActionsOpen(false) }}>
+                      <FileText size={16} className="text-gray-400" /> {showEdit ? 'Hide Edit Profile' : 'Edit Profile'}
+                    </button>
+                    <button className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50" onClick={() => { setShowApprovals((v) => !v); setActionsOpen(false) }}>
+                      <FileText size={16} className="text-gray-400" /> {showApprovals ? 'Hide Approval Requests' : 'Show Approval Requests'}
+                    </button>
+                    <button className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50" onClick={() => { setShowMigrate(true); setActionsOpen(false) }}>
+                      <School size={16} className="text-gray-400" /> Migrate School
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          
+          <div className="mt-4 sm:hidden">
+            <h1 className="text-xl font-bold text-gray-900">{d.name} {d.surname}</h1>
+            <div className="flex items-center gap-2 text-gray-600 text-sm mt-1">
+              <School size={16} /> <span>{d.schoolId || 'No School Assigned'}</span>
+            </div>
+          </div>
+
+          <div className="mt-6 flex flex-wrap gap-2">
+            {d.ageGroup && (
+              <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
+                {d.ageGroup}
+              </span>
+            )}
+            {d.position && (
+              <span className="inline-flex items-center rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">
+                {d.position}
+              </span>
+            )}
+             {d.jerseyNumber && (
+              <span className="inline-flex items-center rounded-full bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-600 ring-1 ring-inset ring-gray-500/10">
+                #{d.jerseyNumber}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {preview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={() => setPreview(null)}>
+          <img src={preview} alt="Preview" className="max-h-[95vh] max-w-[98vw] rounded-md shadow-lg" style={{ transform: 'scale(2)' }} />
+        </div>
+      )}
+
+      {showMigrate && (
+        <PlayerMigrationPanel playerId={player.id || ''} onDone={onUpdated} onClose={() => setShowMigrate(false)} />
+      )}
+
+      {showApprovals && (
+         <PlayerApprovalsPanel entityId={player.id || ''} canDecide title="Approval Requests" onClose={() => setShowApprovals(false)} />
+      )}
+
+      {/* Read-Only Info Cards */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Personal Info Card */}
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <User size={18} className="text-brand" /> Personal Information
+             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
+            <Info label="ID/Passport" value={d.idNumber} icon={CreditCard} />
+            <Info label="Date of Birth" value={d.dob} icon={Calendar} />
+            <Info label="Gender" value={d.gender} icon={Users} />
+            <Info label="Mobile" value={d.phone} icon={Phone} />
+            <Info label="Email" value={d.email} icon={Mail} />
+            <Info label="Address" value={d.address} icon={MapPin} />
+          </div>
+        </div>
+
+        {/* Rugby Info Card */}
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm h-fit">
+          <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <Activity size={18} className="text-brand" /> Rugby Profile
+             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
+            <Info label="Age Group" value={d.ageGroup} icon={Users} />
+            <Info label="Position" value={d.position} icon={Activity} />
+            <Info label="Jersey" value={d.jerseyNumber ? `#${d.jerseyNumber}` : ''} icon={LayoutGrid} />
+            <Info label="Prev. Team" value={d.previousSchool} icon={School} />
+          </div>
+        </div>
+
+        {/* Medical Info Card */}
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+           <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <Heart size={18} className="text-brand" /> Medical Information
+             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
+            <Info label="Medical Aid" value={d.medicalAidName} icon={Heart} />
+            <Info label="Number" value={d.medicalAidNumber} icon={FileText} />
+            <Info label="Allergies" value={d.allergies} icon={AlertCircle} />
+            <Info label="Chronic" value={d.chronicConditions} icon={Activity} />
+            <div className="sm:col-span-2">
+               <Info label="Emergency Notes" value={d.medicalNotes} icon={FileText} />
+            </div>
+          </div>
+        </div>
+
+        {/* Guardian Info Card */}
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+           <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <Shield size={18} className="text-brand" /> Guardian Information
+             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-1 p-4 sm:grid-cols-2">
+            <Info label="Name" value={d.parentName} icon={User} />
+            <Info label="Surname" value={d.parentSurname} icon={User} />
+            <Info label="Relation" value={d.relationship} icon={Users} />
+            <Info label="Contact" value={d.parentContact} icon={Phone} />
+            <Info label="Email" value={d.parentEmail} icon={Mail} />
+            <Info label="Signature" value={d.consentSignature ? 'Signed' : 'Pending'} icon={FileText} />
+          </div>
+        </div>
+      </div>
+
+      {showEdit && (
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-4 py-3 flex justify-between items-center">
+               <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                 <FileText size={18} className="text-brand" /> Edit Profile
+               </div>
+               <button className="rounded-md border p-1 text-gray-500 hover:bg-gray-50" onClick={() => setShowEdit(false)}>
+                 <X size={16} />
+               </button>
+          </div>
+          <div className="p-4">
+            <CoachPlayerEditor player={player} onUpdated={onUpdated} onClose={() => setShowEdit(false)} />
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 px-4 py-3">
+             <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+               <FileText size={18} className="text-brand" /> Documents
+             </div>
+        </div>
+        <div className="p-4">
+          <PlayerDocuments ownerId={player.id || d.serverId || ''} />
+        </div>
+      </div>
+
+      <div className="rounded-md border bg-white p-3">
+        <div className="mb-2 text-sm font-semibold">Pending Changes</div>
+        {proposals.length === 0 && <div className="text-xs text-gray-600">No pending changes</div>}
+        <div className="divide-y">
+          {proposals.map((pp) => (
+            <div key={pp.id} className="flex items-center justify-between py-2 text-sm">
+              <div>
+                <span className="font-semibold">{pp.field}</span>
+                <span className="ml-2 text-gray-700">→ {String(pp.value)}</span>
+                <span className="ml-2 rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700">{pp.status}</span>
+              </div>
+              <div className="flex gap-2">
+                <button className="rounded-md border px-2 py-1" onClick={async () => {
+                  const rowZone = (player.zoneId ?? d.zoneId ?? '') as string
+                  const rowSchool = (player.schoolId ?? d.schoolId ?? '') as string
+                  await login('Coach', rowZone, rowSchool)
+                  const res = await putJson('players', player.id || '', { [pp.field]: pp.value, schoolId: rowSchool, zoneId: rowZone })
+                  if (res) {
+                    setProposalStatus('Player', pp.id, 'approved')
+                    deleteProposal('Player', pp.id)
+                    try { window.dispatchEvent(new CustomEvent('data:players:updated', { detail: { id: player.id || '' } })) } catch {}
+                    await onUpdated()
+                  }
+                }}>Approve</button>
+                <button className="rounded-md border px-2 py-1" onClick={async () => {
+                  setProposalStatus('Player', pp.id, 'rejected')
+                  deleteProposal('Player', pp.id)
+                  await onUpdated()
+                }}>Reject</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <PlayerHistoryPanel playerId={player.id || ''} />
+    </div>
+  )
+}
+
+function CoachPlayerEditor({ player, onUpdated, onClose }: { player: any; onUpdated: () => void; onClose: () => void }) {
+  const d = player.data || {}
+  const [vals, setVals] = useState<any>({ ...d })
+  const id = player.id || d.serverId || ''
+  const fields: { key: string; label: string; type?: 'text' | 'date' | 'email' | 'number' }[] = [
+    { key: 'name', label: 'Name' },
+    { key: 'surname', label: 'Surname' },
+    { key: 'idNumber', label: 'ID/Passport' },
+    { key: 'dob', label: 'Date of Birth', type: 'date' },
+    { key: 'gender', label: 'Gender' },
+    { key: 'ageGroup', label: 'Age Group' },
+    { key: 'phone', label: 'Mobile' },
+    { key: 'email', label: 'Email', type: 'email' },
+    { key: 'address', label: 'Address' },
+    { key: 'emergencyContactName', label: 'Emergency Contact Name' },
+    { key: 'emergencyContactNumber', label: 'Emergency Contact Number' },
+    { key: 'parentName', label: 'Parent/Guardian Name' },
+    { key: 'parentSurname', label: 'Parent/Guardian Surname' },
+    { key: 'relationship', label: 'Relationship to Player' },
+    { key: 'parentContact', label: 'Parent Contact Number' },
+    { key: 'parentEmail', label: 'Parent Email', type: 'email' },
+    { key: 'consentSignature', label: 'Digital Consent Signature' },
+    { key: 'position', label: 'Position(s) Played' },
+    { key: 'jerseyNumber', label: 'Jersey Number', type: 'number' },
+    { key: 'team', label: 'Team' },
+    { key: 'previousSchool', label: 'Previous School/Team' },
+    { key: 'medicalAidName', label: 'Medical Aid Name' },
+    { key: 'medicalAidNumber', label: 'Medical Aid Number' },
+    { key: 'allergies', label: 'Known Allergies' },
+    { key: 'chronicConditions', label: 'Chronic Conditions' },
+    { key: 'medicalNotes', label: 'Emergency Medical Notes' },
+  ]
+  const personalKeys = ['name','surname','idNumber','dob','gender','ageGroup','phone','email','address','emergencyContactName','emergencyContactNumber']
+  const guardianKeys = ['parentName','parentSurname','relationship','parentContact','parentEmail','consentSignature']
+  const rugbyKeys = ['position','jerseyNumber','team','previousSchool']
+  const medicalKeys = ['medicalAidName','medicalAidNumber','allergies','chronicConditions','medicalNotes']
+  const allKeys = [...personalKeys, ...guardianKeys, ...rugbyKeys, ...medicalKeys]
+  const [focusNextKey, setFocusNextKey] = useState<string | undefined>(undefined)
+  const [banner, setBanner] = useState<{ t: 'success' | 'error', msg: string } | null>(null)
+  useEffect(() => {
+    if (!focusNextKey) return
+    const host = document.querySelector(`[data-field-key="${focusNextKey}"]`) as HTMLElement | null
+    const input = host?.querySelector('input,select') as HTMLElement | null
+    input?.focus()
+    setFocusNextKey(undefined)
+  }, [focusNextKey])
+  function group(keys: string[]) { return fields.filter((f) => keys.includes(f.key)) }
+  const [prevZone, setPrevZone] = useState<string>('')
+  const [prevSchool, setPrevSchool] = useState<string>(vals.previousSchool || '')
+  function setValue(k: string, v: string) {
+    setVals((prev: any) => ({ ...prev, [k]: v }))
+  }
+  async function saveField(k: string) {
+    if (!id) return
+    const value = k === 'previousSchool' ? (prevSchool || '').toString().trim() : (vals[k] ?? '').toString().trim()
+    if (k === 'email' && value && !isEmail(value)) return
+    if (k === 'phone' && value && !isPhoneZA(value)) return
+    if (k === 'idNumber' && value && !isIdNumber(value)) return
+    const rowZone = (player.zoneId ?? d.zoneId ?? '') as string
+    const rowSchool = (player.schoolId ?? d.schoolId ?? '') as string
+    await login('Coach', rowZone, rowSchool)
+    const res = await putJson('players', id, { [k]: value, schoolId: rowSchool, zoneId: rowZone })
+    if (res) {
+      const parsed = typeof res?.data === 'string' ? (() => { try { return JSON.parse(res.data || '{}') } catch { return {} } })() : (res?.data || {})
+      const merged = {
+        ...parsed,
+        name: res.name !== undefined ? res.name : parsed.name,
+        surname: res.surname !== undefined ? res.surname : parsed.surname,
+        email: res.email !== undefined ? res.email : parsed.email,
+        schoolId: res.schoolId !== undefined ? res.schoolId : parsed.schoolId,
+        zoneId: res.zoneId !== undefined ? res.zoneId : parsed.zoneId,
+        ageGroup: res.ageGroup !== undefined ? res.ageGroup : parsed.ageGroup,
+        phone: res.contactNumber !== undefined ? res.contactNumber : parsed.phone,
+        idNumber: res.idNumber !== undefined ? res.idNumber : parsed.idNumber,
+      }
+      setVals(merged)
+      setBanner({ t: 'success', msg: 'Saved' })
+      emitPlayersUpdated(id)
+      await onUpdated()
+    } else {
+      const ok = await safePut('players', id, { [k]: value, schoolId: rowSchool, zoneId: rowZone })
+      if (ok) { setBanner({ t: 'success', msg: 'Saved' }); await onUpdated() } else { setBanner({ t: 'error', msg: 'Update failed' }) }
+    }
+    setTimeout(() => setBanner(null), 1500)
+    const idx = allKeys.indexOf(k)
+    const nxt = allKeys[idx + 1]
+    if (nxt) setFocusNextKey(nxt)
+  }
+  async function saveAll() {
+    if (!id) return
+    const updates: any = {}
+    fields.forEach(f => {
+      const nv = vals[f.key]
+      const ov = d[f.key]
+      if (nv !== undefined && nv !== ov) updates[f.key] = nv
+    })
+    if (prevSchool && prevSchool !== d.previousSchool) updates.previousSchool = prevSchool
+    if (!Object.keys(updates).length) return onClose()
+    const rowZone = (player.zoneId ?? d.zoneId ?? '') as string
+    const rowSchool = (player.schoolId ?? d.schoolId ?? '') as string
+    await login('Coach', rowZone, rowSchool)
+    const res = await putJson('players', id, { ...updates, schoolId: rowSchool, zoneId: rowZone })
+    if (res) {
+      const parsed = typeof res?.data === 'string' ? (() => { try { return JSON.parse(res.data || '{}') } catch { return {} } })() : (res?.data || {})
+      const merged = {
+        ...parsed,
+        name: res.name !== undefined ? res.name : parsed.name,
+        surname: res.surname !== undefined ? res.surname : parsed.surname,
+        email: res.email !== undefined ? res.email : parsed.email,
+        schoolId: res.schoolId !== undefined ? res.schoolId : parsed.schoolId,
+        zoneId: res.zoneId !== undefined ? res.zoneId : parsed.zoneId,
+        ageGroup: res.ageGroup !== undefined ? res.ageGroup : parsed.ageGroup,
+        phone: res.contactNumber !== undefined ? res.contactNumber : parsed.phone,
+        idNumber: res.idNumber !== undefined ? res.idNumber : parsed.idNumber,
+      }
+      setVals(merged)
+      setBanner({ t: 'success', msg: 'All changes saved' })
+      emitPlayersUpdated(id)
+      await onUpdated(); onClose()
+    } else {
+      const ok = await safePut('players', id, { ...updates, schoolId: rowSchool, zoneId: rowZone })
+      if (ok) { setBanner({ t: 'success', msg: 'All changes saved' }); await onUpdated(); onClose() } else { setBanner({ t: 'error', msg: 'Update failed' }) }
+    }
+    setTimeout(() => setBanner(null), 1500)
+  }
+  return (
+    <div className="space-y-4">
+      {banner && (
+        <div className={`rounded-md p-2 text-sm ${banner.t === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{banner.msg}</div>
+      )}
+      <fieldset className="rounded-md border p-3">
+        <legend className="text-sm font-semibold text-brand border-l-4 border-brand pl-2">Personal Information</legend>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {group(personalKeys).map((f) => (
+            <div
+              key={f.key}
+              className={`rounded-md p-2 ${!vals[f.key] ? 'border-yellow-400 bg-yellow-50 border' : 'border'}`}
+              data-field-key={f.key}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveField(f.key) } }}
+            >
+              {!vals[f.key] && <span className="float-right rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700">Missing</span>}
+              <label className="block">
+                <span className="text-sm font-medium">{f.label}</span>
+                {f.key === 'gender' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    <option value="">Select...</option>
+                    <option>Male</option>
+                    <option>Female</option>
+                  </select>
+                ) : f.key === 'ageGroup' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    {AGE_GROUPS.map((g) => (
+                      <option key={g}>{g}</option>
+                    ))}
+                  </select>
+                ) : f.key === 'position' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    {POSITIONS.map((p) => (
+                      <option key={p}>{p}</option>
+                    ))}
+                  </select>
+                ) : f.key === 'relationship' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    {RELATIONSHIPS.map((r) => (
+                      <option key={r}>{r}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input type={f.type || 'text'} className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)} />
+                )}
+              </label>
+              <div className="mt-2 text-right"><button className="rounded-md bg-brand px-3 py-1 text-white" onClick={() => saveField(f.key)}>Save</button></div>
+            </div>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset className="rounded-md border p-3">
+        <legend className="text-sm font-semibold text-brand border-l-4 border-brand pl-2">Parent/Guardian Information</legend>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {group(guardianKeys).map((f) => (
+            <div
+              key={f.key}
+              className={`rounded-md p-2 ${!vals[f.key] ? 'border-yellow-400 bg-yellow-50 border' : 'border'}`}
+              data-field-key={f.key}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveField(f.key) } }}
+            >
+              {!vals[f.key] && <span className="float-right rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700">Missing</span>}
+              <label className="block">
+                <span className="text-sm font-medium">{f.label}</span>
+                {f.key === 'gender' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    <option value="">Select...</option>
+                    <option>Male</option>
+                    <option>Female</option>
+                  </select>
+                ) : f.key === 'ageGroup' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    {AGE_GROUPS.map((g) => (
+                      <option key={g}>{g}</option>
+                    ))}
+                  </select>
+                ) : f.key === 'position' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    {POSITIONS.map((p) => (
+                      <option key={p}>{p}</option>
+                    ))}
+                  </select>
+                ) : f.key === 'relationship' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    {RELATIONSHIPS.map((r) => (
+                      <option key={r}>{r}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input type={f.type || 'text'} className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)} />
+                )}
+              </label>
+              <div className="mt-2 text-right"><button className="rounded-md bg-brand px-3 py-1 text-white" onClick={() => saveField(f.key)}>Save</button></div>
+            </div>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset className="rounded-md border p-3">
+        <legend className="text-sm font-semibold text-brand border-l-4 border-brand pl-2">Rugby Information</legend>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {group(rugbyKeys).map((f) => (
+            <div
+              key={f.key}
+              className={`rounded-md p-2 ${f.key === 'previousSchool' ? (!prevSchool ? 'border-yellow-400 bg-yellow-50 border' : 'border') : (!vals[f.key] ? 'border-yellow-400 bg-yellow-50 border' : 'border')}`}
+              data-field-key={f.key}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveField(f.key) } }}
+            >
+              {(f.key === 'previousSchool' ? !prevSchool : !vals[f.key]) && <span className="float-right rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700">Missing</span>}
+              {f.key === 'previousSchool' ? (
+                <div className="grid grid-cols-1 gap-2">
+                  <span className="text-sm font-medium">Previous School</span>
+                  <ZoneSelect value={prevZone} onChange={setPrevZone} />
+                  <SchoolSelect zoneId={prevZone} value={prevSchool} onChange={setPrevSchool} />
+                </div>
+                ) : (
+                  <label className="block">
+                    <span className="text-sm font-medium">{f.label}</span>
+                    {f.key === 'position' ? (
+                      <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                        {POSITIONS.map((p) => (
+                          <option key={p}>{p}</option>
+                        ))}
+                      </select>
+                    ) : f.key === 'team' ? (
+                      <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                        <option value="">Select...</option>
+                        {AGE_GROUPS.map((t) => (
+                          <option key={t}>{t}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input type={f.type || 'text'} className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)} />
+                    )}
+                  </label>
+                )}
+              <div className="mt-2 text-right"><button className="rounded-md bg-brand px-3 py-1 text-white" onClick={() => saveField(f.key)}>Save</button></div>
+            </div>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset className="rounded-md border p-3">
+        <legend className="text-sm font-semibold text-brand border-l-4 border-brand pl-2">Medical Information</legend>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {group(medicalKeys).map((f) => (
+            <div
+              key={f.key}
+              className={`rounded-md p-2 ${!vals[f.key] ? 'border-yellow-400 bg-yellow-50 border' : 'border'}`}
+              data-field-key={f.key}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveField(f.key) } }}
+            >
+              {!vals[f.key] && <span className="float-right rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700">Missing</span>}
+              <label className="block">
+                <span className="text-sm font-medium">{f.label}</span>
+                {f.key === 'gender' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    <option value="">Select...</option>
+                    <option>Male</option>
+                    <option>Female</option>
+                  </select>
+                ) : f.key === 'ageGroup' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    {AGE_GROUPS.map((g) => (
+                      <option key={g}>{g}</option>
+                    ))}
+                  </select>
+                ) : f.key === 'position' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    {POSITIONS.map((p) => (
+                      <option key={p}>{p}</option>
+                    ))}
+                  </select>
+                ) : f.key === 'relationship' ? (
+                  <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
+                    {RELATIONSHIPS.map((r) => (
+                      <option key={r}>{r}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input type={f.type || 'text'} className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)} />
+                )}
+              </label>
+              <div className="mt-2 text-right"><button className="rounded-md bg-brand px-3 py-1 text-white" onClick={() => saveField(f.key)}>Save</button></div>
+            </div>
+          ))}
+        </div>
+      </fieldset>
+      <div className="text-right">
+        <button className="mr-2 rounded-md border px-3 py-1" onClick={onClose}>Close</button>
+        <button className="rounded-md bg-brand px-3 py-1 text-white" onClick={saveAll}>Save All Changes</button>
+      </div>
+      {banner && (
+        <div className={`fixed bottom-4 right-4 rounded-md px-3 py-2 text-white shadow ${banner.t === 'success' ? 'bg-green-600' : 'bg-red-600'}`}>{banner.msg}</div>
+      )}
+    </div>
+  )
+}
+
+function PlayerMissingForm({ id, serverId, data, lockedFields, pendingFields = [], onUpdated }: { id: string; serverId: string; data: any; lockedFields: string[]; pendingFields?: string[]; onUpdated: (d: any, locked: string[]) => void }) {
+  const fields: { key: string; label: string; type?: 'text' | 'date' | 'email' | 'number' }[] = [
+    { key: 'idNumber', label: 'ID/Passport' },
+    { key: 'dob', label: 'Date of Birth', type: 'date' },
+    { key: 'gender', label: 'Gender' },
+    { key: 'ageGroup', label: 'Age Group' },
+    { key: 'schoolId', label: 'School' },
+    { key: 'zoneId', label: 'Zone' },
+    { key: 'phone', label: 'Mobile' },
+    { key: 'email', label: 'Email', type: 'email' },
+    { key: 'address', label: 'Address' },
+    { key: 'emergencyContactName', label: 'Emergency Contact Name' },
+    { key: 'emergencyContactNumber', label: 'Emergency Contact Number' },
+    { key: 'parentName', label: 'Parent/Guardian Name' },
+    { key: 'parentSurname', label: 'Parent/Guardian Surname' },
+    { key: 'relationship', label: 'Relationship to Player' },
+    { key: 'parentContact', label: 'Parent Contact Number' },
+    { key: 'parentEmail', label: 'Parent Email Address', type: 'email' },
+    { key: 'consentSignature', label: 'Digital Consent Signature' },
+    { key: 'position', label: 'Position(s) Played' },
+    { key: 'jerseyNumber', label: 'Jersey Number', type: 'number' },
+    { key: 'previousSchool', label: 'Previous School/Team' },
+    { key: 'medicalAidName', label: 'Medical Aid Name' },
+    { key: 'medicalAidNumber', label: 'Medical Aid Number' },
+    { key: 'allergies', label: 'Known Allergies' },
+    { key: 'chronicConditions', label: 'Chronic Conditions' },
+    { key: 'medicalNotes', label: 'Emergency Medical Notes' },
+  ]
+  const missing = fields.filter(f => !data?.[f.key])
+  const [values, setValues] = useState<Record<string, string>>({})
+  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+  const [focusNextKey, setFocusNextKey] = useState<string | undefined>(undefined)
+  const [banner, setBanner] = useState<{ t: 'success' | 'error', msg: string } | null>(null)
+  const [selZone, setSelZone] = useState<string>(String(data.zoneId || ''))
+  const [selSchool, setSelSchool] = useState<string>(String(data.schoolId || ''))
+  const [prevZone, setPrevZone] = useState<string>('')
+  const [prevSchool, setPrevSchool] = useState<string>('')
+  useEffect(() => {
+    const init: Record<string, string> = {}
+    missing.forEach(f => { init[f.key] = '' })
+    setValues(init)
+  }, [id])
+  useEffect(() => {
+    if (!focusNextKey) return
+    const el = inputRefs.current[focusNextKey]
+    if (el) el.focus()
+    setFocusNextKey(undefined)
+  }, [missing, focusNextKey])
+  if (missing.length === 0) return <div className="text-sm text-gray-500">No missing information</div>
+  function setValue(k: string, v: string) {
+    setValues(prev => ({ ...prev, [k]: v }))
+  }
+  async function saveOne(fieldKey: string) {
+    const v = (values[fieldKey] || '').trim()
+    const val = fieldKey === 'zoneId' ? selZone : fieldKey === 'schoolId' ? selSchool : fieldKey === 'previousSchool' ? prevSchool : v
+    if (!val) return
+    const updates: any = { [fieldKey]: val }
+    const newLocks = [...lockedFields]
+    if (!newLocks.includes(fieldKey)) newLocks.push(fieldKey)
+    onUpdated({ ...data, ...updates }, newLocks)
+    if (serverId) {
+      const res = await postJsonPath('approvals', { entityType: 'players', entityId: serverId, requestedChanges: [{ field: fieldKey, previous: (data as any)?.[fieldKey], updated: val }] })
+      if (!res.ok) {
+        addProposal('Player', serverId || id, fieldKey, val)
+        setBanner({ t: 'error', msg: 'Saved locally; approval request not sent' })
+        setTimeout(() => setBanner(null), 2000)
+        return
+      }
+    } else {
+      addProposal('Player', serverId || id, fieldKey, val)
+    }
+    setBanner({ t: 'success', msg: 'Saved' })
+    setTimeout(() => setBanner(null), 1500)
+    const idx = missing.findIndex((m) => m.key === fieldKey)
+    const nxt = missing[idx + 1]?.key
+    if (nxt) setFocusNextKey(nxt)
+  }
+  return (
+    <div className="mt-2 rounded-md border p-3">
+      <div className="mb-2 text-xs text-gray-600">Saved values are locked locally; if online, an approval request is sent to your school for review.</div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {missing.map((f) => {
+          const isPending = pendingFields.includes(f.key)
+          const isLocked = lockedFields.includes(f.key)
+          
+          return (
+          <div key={f.key} className={`rounded-md border p-2 ${isPending ? 'border-yellow-400 bg-yellow-50' : ''} ${isLocked ? 'bg-gray-50' : ''}`}>
+            <label className="block">
+              <span className="text-sm font-medium">
+                {f.label}
+                {isPending && <span className="ml-1 text-yellow-600">⏳ Pending</span>}
+                {isLocked && !isPending && <span className="ml-1 text-gray-600">🔒 Locked</span>}
+              </span>
+              {f.key === 'gender' ? (
+                <select className="mt-1 w-full rounded-md border p-2" value={values[f.key] || ''} onChange={(e) => setValue(f.key, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveOne(f.key) } }}>
+                  <option value="">Select...</option>
+                  <option>Male</option>
+                  <option>Female</option>
+                </select>
+              ) : f.key === 'ageGroup' ? (
+                <select className="mt-1 w-full rounded-md border p-2" value={values[f.key] || ''} onChange={(e) => setValue(f.key, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveOne(f.key) } }}>
+                  {['U15', 'U16', 'U17', 'U19'].map((g) => (
+                    <option key={g}>{g}</option>
+                  ))}
+                </select>
+              ) : f.key === 'position' ? (
+                <select className="mt-1 w-full rounded-md border p-2" value={values[f.key] || ''} onChange={(e) => setValue(f.key, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveOne(f.key) } }}>
+                  {['Prop','Hooker','Lock','Flanker','Number 8','Scrum-half','Fly-half','Centre','Wing','Fullback'].map((p) => (
+                    <option key={p}>{p}</option>
+                  ))}
+                </select>
+              ) : f.key === 'relationship' ? (
+                <select className="mt-1 w-full rounded-md border p-2" value={values[f.key] || ''} onChange={(e) => setValue(f.key, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveOne(f.key) } }}>
+                  {['Parent','Guardian','Relative','Other'].map((r) => (
+                    <option key={r}>{r}</option>
+                  ))}
+                </select>
+              ) : f.key === 'zoneId' ? (
+                <ZoneSelect value={selZone} onChange={setSelZone} />
+              ) : f.key === 'schoolId' ? (
+                <SchoolSelect zoneId={selZone} value={selSchool} onChange={setSelSchool} />
+              ) : f.key === 'previousSchool' ? (
+                <div className="grid grid-cols-1 gap-2">
+                  <span className="text-xs text-gray-600">Previous School</span>
+                  <ZoneSelect value={prevZone} onChange={setPrevZone} />
+                  <SchoolSelect zoneId={prevZone} value={prevSchool} onChange={setPrevSchool} />
+                </div>
+              ) : (
+                <input
+                  type={f.type || 'text'}
+                  className="mt-1 w-full rounded-md border p-2"
+                  value={values[f.key] || ''}
+                  onChange={(e) => setValue(f.key, e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveOne(f.key) } }}
+                  ref={(el) => { inputRefs.current[f.key] = el }}
+                />
+              )}
+            </label>
+            <div className="mt-2 text-right">
+              <button 
+                className={`rounded-md px-3 py-1 text-white ${
+                  isPending 
+                    ? 'bg-yellow-500 cursor-not-allowed' 
+                    : isLocked 
+                    ? 'bg-gray-500 cursor-not-allowed'
+                    : 'bg-brand hover:bg-brand/90'
+                }`}
+                onClick={() => saveOne(f.key)}
+                disabled={isPending || isLocked}
+              >
+                {isPending ? 'Pending Review' : isLocked ? 'Locked' : 'Save'}
+              </button>
+            </div>
+          </div>
+        )})}
+      </div>
+      {banner && (
+        <div className={`fixed bottom-4 right-4 rounded-md px-3 py-2 text-white shadow ${banner.t === 'success' ? 'bg-green-600' : 'bg-red-600'}`}>{banner.msg}</div>
+      )}
+    </div>
+  )
+}
+function Info({ label, value, icon: Icon }: { label: string; value?: string; icon?: any }) {
+  return (
+    <div className="flex items-start gap-3 p-2 transition-colors hover:bg-gray-50 rounded-lg">
+      {Icon && <div className="mt-0.5 text-brand/60"><Icon size={16} /></div>}
+      <div>
+        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</div>
+        <div className="text-sm font-semibold text-gray-900 mt-0.5">{value || '—'}</div>
+      </div>
+    </div>
+  )
+}
+
+function PendingPlayersView({ players, loading, onApprove, onReject, onBulkApprove, onRefresh }: {
+  players: any[]
+  loading: boolean
+  onApprove: (playerId: string) => void
+  onReject: (playerId: string, reason?: string) => void
+  onBulkApprove: (playerIds: string[]) => void
+  onRefresh: () => void
+}) {
+  const [selectedPlayers, setSelectedPlayers] = useState<Set<string>>(new Set())
+  const [rejectModal, setRejectModal] = useState<{ playerId: string; show: boolean } | null>(null)
+  const [rejectReason, setRejectReason] = useState('')
+  
+  const toggleSelection = (playerId: string) => {
+    const newSelected = new Set(selectedPlayers)
+    if (newSelected.has(playerId)) {
+      newSelected.delete(playerId)
+    } else {
+      newSelected.add(playerId)
+    }
+    setSelectedPlayers(newSelected)
+  }
+  
+  const selectAll = () => {
+    if (selectedPlayers.size === players.length) {
+      setSelectedPlayers(new Set())
+    } else {
+      setSelectedPlayers(new Set(players.map(p => p.id)))
+    }
+  }
+  
+  const handleBulkApprove = async () => {
+    if (selectedPlayers.size === 0) return
+    const playerIds = Array.from(selectedPlayers)
+    await onBulkApprove(playerIds)
+    setSelectedPlayers(new Set())
+  }
+  
+  const handleReject = async () => {
+    if (!rejectModal) return
+    await onReject(rejectModal.playerId, rejectReason || 'Rejected by coach')
+    setRejectModal(null)
+    setRejectReason('')
+  }
+  
+  if (loading) {
+    return (
+      <div className="rounded-lg border bg-white p-8 text-center">
+        <div className="text-gray-600">Loading pending players...</div>
+      </div>
+    )
+  }
+  
+  if (players.length === 0) {
+    return (
+      <div className="rounded-lg border bg-white p-8 text-center">
+        <div className="text-gray-600">No pending player reviews</div>
+        <button className="mt-2 rounded-md bg-brand px-3 py-1 text-white" onClick={onRefresh}>
+          Refresh
+        </button>
+      </div>
+    )
+  }
+  
+  return (
+    <div className="space-y-4">
+      {/* Bulk Actions */}
+      <div className="flex items-center justify-between rounded-lg border bg-white p-3">
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2">
+            <input 
+              type="checkbox" 
+              checked={selectedPlayers.size === players.length && players.length > 0}
+              onChange={selectAll}
+            />
+            <span className="text-sm">Select All</span>
+          </label>
+          <span className="text-sm text-gray-600">
+            {selectedPlayers.size} selected
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <button 
+            className="rounded-md bg-green-600 px-3 py-1 text-white disabled:opacity-50"
+            onClick={handleBulkApprove}
+            disabled={selectedPlayers.size === 0}
+          >
+            Approve Selected ({selectedPlayers.size})
+          </button>
+          <button 
+            className="rounded-md border px-3 py-1"
+            onClick={onRefresh}
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+      
+      {/* Pending Players List */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {players.map((player) => {
+          const d = player.data || {}
+          const photo = typeof d.photoUrl === 'string' && d.photoUrl.startsWith('/uploads') 
+            ? `${API_ORIGIN}${d.photoUrl}`
+            : (d.photoUrl || '')
+          const initials = ((d.name || '').charAt(0) + (d.surname || '').charAt(0)).toUpperCase() || 'P'
+          const isSelected = selectedPlayers.has(player.id)
+          
+          return (
+            <div key={player.id} className="rounded-lg border bg-white p-3 shadow-sm">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  <input 
+                    type="checkbox" 
+                    checked={isSelected}
+                    onChange={() => toggleSelection(player.id)}
+                    className="mt-1"
+                  />
+                  {photo ? (
+                    <img src={photo} alt="Profile" className="h-16 w-16 rounded-full object-cover" />
+                  ) : (
+                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-red-100 text-red-700 ring-2 ring-red-300">
+                      {initials}
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-semibold text-red-600">
+                      {d.name} {d.surname}
+                    </div>
+                    <div className="text-sm text-gray-600">
+                      {d.ageGroup || '—'} • {d.schoolId || player.schoolId || '—'}
+                    </div>
+                    <div className="text-sm text-gray-600">
+                      {d.email || '—'}
+                    </div>
+                    {d.rejectionReason && (
+                      <div className="mt-1 text-xs text-red-600">
+                        Previous rejection: {d.rejectionReason}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <button 
+                    className="rounded-md bg-green-600 px-3 py-1 text-white text-sm"
+                    onClick={() => onApprove(player.id)}
+                  >
+                    Approve
+                  </button>
+                  <button 
+                    className="rounded-md border px-3 py-1 text-sm"
+                    onClick={() => setRejectModal({ playerId: player.id, show: true })}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      
+      {/* Reject Modal */}
+      {rejectModal?.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="rounded-lg border bg-white p-4 shadow-lg max-w-md w-[90%]">
+            <div className="mb-3 text-lg font-semibold">Reject Player</div>
+            <div className="mb-3">
+              <label className="block">
+                <span className="text-sm font-medium">Reason for rejection (optional)</span>
+                <textarea 
+                  className="mt-1 w-full rounded-md border p-2"
+                  rows={3}
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder="Enter reason for rejection..."
+                />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button 
+                className="rounded-md border px-3 py-1"
+                onClick={() => {
+                  setRejectModal(null)
+                  setRejectReason('')
+                }}
+              >
+                Cancel
+              </button>
+              <button 
+                className="rounded-md bg-red-600 px-3 py-1 text-white"
+                onClick={handleReject}
+              >
+                Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+function ManageMyAdmin({ zone, school, onUpdated }: { zone?: string; school?: string; onUpdated: () => void }) {
+  const [admin, setAdmin] = useState<any | null>(null)
+  const [vals, setVals] = useState<{ name: string; surname: string; email: string } | null>(null)
+  useEffect(() => { load() }, [zone, school])
+  async function load() {
+    const email = localStorage.getItem('auth:email') || ''
+    const list = await fetchList('admins', { zoneId: zone, schoolId: school })
+    const me = list.find((a: any) => String(a.email || a.data?.email || '') === email)
+    setAdmin(me || null)
+    if (me) setVals({ name: me.data?.name || me.name || '', surname: me.data?.surname || me.surname || '', email: me.data?.email || me.email || '' })
+  }
+  async function save() {
+    if (!admin || !vals) return
+    await login('SchoolAdmin', zone, school, vals.email)
+    const ok = await safePut('admins', admin.id, { name: vals.name, surname: vals.surname, email: vals.email, zoneId: zone, schoolId: school })
+    if (ok) { await load(); await onUpdated() }
+  }
+  if (!admin) return (
+    <div className="rounded-lg border bg-white p-3 shadow">
+      <div className="text-sm text-gray-600">No admin record found for your account</div>
+    </div>
+  )
+  return (
+    <div className="rounded-lg border bg-white p-3 shadow">
+      <div className="mb-3 text-base font-semibold">My Admin Details</div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <label className="block"><span className="text-xs font-medium">Name</span><input className="mt-1 w-full rounded-md border p-2 text-sm" value={vals?.name || ''} onChange={(e) => setVals((v) => ({ ...(v as any), name: e.target.value }))} /></label>
+        <label className="block"><span className="text-xs font-medium">Surname</span><input className="mt-1 w-full rounded-md border p-2 text-sm" value={vals?.surname || ''} onChange={(e) => setVals((v) => ({ ...(v as any), surname: e.target.value }))} /></label>
+        <label className="block sm:col-span-2"><span className="text-xs font-medium">Email</span><input type="email" className="mt-1 w-full rounded-md border p-2 text-sm" value={vals?.email || ''} onChange={(e) => setVals((v) => ({ ...(v as any), email: e.target.value }))} /></label>
+        <div className="sm:col-span-2 text-right">
+          <button className="rounded-md bg-brand px-3 py-1 text-white" onClick={save}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RefereeDashboard({ referees }: { referees: any[] }) {
+  return (
+    <div className="space-y-6">
+      {/* Referee Header Card */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-700 via-blue-600 to-blue-500 text-white shadow-xl">
+        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4xIj48Y2lyY2xlIGN4PSIzMCIgY3k9IjMwIiByPSIyIi8+PC9nPjwvZz48L3N2Zz4=')] opacity-30"></div>
+        <div className="relative px-8 py-8">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <Shield className="h-8 w-8 text-blue-100" />
+                <span className="text-blue-100 text-sm font-medium uppercase tracking-wider">Officials</span>
+              </div>
+              <h1 className="text-3xl font-bold mb-2">Referee Dashboard</h1>
+              <div className="text-blue-100">Manage and view officials</div>
+            </div>
+            <div className="text-right">
+              <div className="text-4xl font-bold">{referees.length}</div>
+              <div className="text-blue-100 text-sm">Active Referees</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+          {referees.map((r) => (
+            <RefereeCard key={r.id} referee={r} badge={String(r.data?.zoneId || '—')} />
+          ))}
+          {referees.length === 0 && <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">No referees found</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EPHSRUAdminDashboard({ schools, admins, referees }: { schools: any[]; admins: any[]; referees: any[] }) {
+  const [activeTab, setActiveTab] = useState<'overview' | 'schools' | 'admins' | 'referees'>('overview')
+  const [searchQuery, setSearchQuery] = useState('')
+
+  // EPHSRU statistics
+  const stats = useMemo(() => {
+    return {
+      totalSchools: schools.length,
+      totalAdmins: admins.length,
+      totalReferees: referees.length,
+    }
+  }, [schools, admins, referees])
+
+  const filteredSchools = useMemo(() => {
+    if (!searchQuery) return schools
+    const q = searchQuery.toLowerCase()
+    return schools.filter(s => (s.name || '').toLowerCase().includes(q))
+  }, [schools, searchQuery])
+
+  const filteredAdmins = useMemo(() => {
+    if (!searchQuery) return admins
+    const q = searchQuery.toLowerCase()
+    return admins.filter(a => (a.data?.name || '').toLowerCase().includes(q) || (a.data?.surname || '').toLowerCase().includes(q))
+  }, [admins, searchQuery])
+
+  const filteredReferees = useMemo(() => {
+    if (!searchQuery) return referees
+    const q = searchQuery.toLowerCase()
+    return referees.filter(r => (r.data?.name || '').toLowerCase().includes(q) || (r.data?.surname || '').toLowerCase().includes(q))
+  }, [referees, searchQuery])
+
+  return (
+    <div className="space-y-6">
+      {/* EPHSRU Header Card */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-700 via-blue-600 to-blue-500 text-white shadow-xl">
+        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4xIj48Y2lyY2xlIGN4PSIzMCIgY3k9IjMwIiByPSIyIi8+PC9nPjwvZz48L3N2Zz4=')] opacity-30"></div>
+        <div className="relative px-8 py-8">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <Crown className="h-8 w-8 text-blue-100" />
+                <span className="text-blue-100 text-sm font-medium uppercase tracking-wider">System Administration</span>
+              </div>
+              <h1 className="text-3xl font-bold mb-2">EPHSRU Dashboard</h1>
+              <div className="text-blue-100">Manage schools, zones, and system settings</div>
+            </div>
+            <div className="text-right">
+              <div className="text-4xl font-bold">{schools.length}</div>
+              <div className="text-blue-100 text-sm">Registered Schools</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats Overview Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="rounded-xl border bg-white p-5 shadow-sm hover:shadow-md transition-shadow">
+          <div className="flex items-center justify-between mb-3">
+            <div className="rounded-lg bg-blue-50 p-2">
+              <School className="h-5 w-5 text-blue-600" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-gray-900">{stats.totalSchools}</div>
+          <div className="text-sm text-gray-500">Total Schools</div>
+        </div>
+        <div className="rounded-xl border bg-white p-5 shadow-sm hover:shadow-md transition-shadow">
+          <div className="flex items-center justify-between mb-3">
+            <div className="rounded-lg bg-amber-50 p-2">
+              <Shield className="h-5 w-5 text-amber-600" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-gray-900">{stats.totalAdmins}</div>
+          <div className="text-sm text-gray-500">School Admins</div>
+        </div>
+        <div className="rounded-xl border bg-white p-5 shadow-sm hover:shadow-md transition-shadow">
+          <div className="flex items-center justify-between mb-3">
+            <div className="rounded-lg bg-emerald-50 p-2">
+              <UserCheck className="h-5 w-5 text-emerald-600" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-gray-900">{stats.totalReferees}</div>
+          <div className="text-sm text-gray-500">Referees</div>
+        </div>
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="border-b border-gray-200">
+        <nav className="flex space-x-8">
+          {[
+            { id: 'overview', label: 'Overview', icon: Activity },
+            { id: 'schools', label: 'Schools', icon: School },
+            { id: 'admins', label: 'School Admins', icon: Shield },
+            { id: 'referees', label: 'Referees', icon: UserCheck },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === tab.id
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              <tab.icon className="h-4 w-4" />
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      <div className="min-h-[400px]">
+        {/* OVERVIEW TAB */}
+        {activeTab === 'overview' && (
+          <div className="space-y-6">
+             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="rounded-xl border bg-white p-6 shadow-sm">
+                  <h3 className="text-lg font-semibold mb-4">System Status</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <span className="text-gray-600">Active Schools</span>
+                      <span className="text-xl font-bold text-gray-900">{stats.totalSchools}</span>
+                    </div>
+                     <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <span className="text-gray-600">Total Referees</span>
+                      <span className="text-xl font-bold text-gray-900">{stats.totalReferees}</span>
+                    </div>
+                  </div>
+                </div>
+             </div>
+          </div>
+        )}
+
+        {/* SCHOOLS TAB */}
+        {activeTab === 'schools' && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Schools Directory</h3>
+               <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search schools..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              {filteredSchools.map((s) => (<SchoolCard key={s.id} school={s} />))}
+              {filteredSchools.length === 0 && <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">No schools registered</div>}
+            </div>
+          </div>
+        )}
+
+        {/* ADMINS TAB */}
+        {activeTab === 'admins' && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">School Administrators</h3>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search admins..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              {filteredAdmins.map((a) => (
+                <div key={a.id} className="group relative overflow-hidden rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200 transition-all hover:shadow-md hover:ring-blue-200">
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className="h-12 w-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-lg">
+                      {String(a.data?.name || a.name || '').charAt(0)}{String(a.data?.surname || a.surname || '').charAt(0)}
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-gray-900">{String(a.data?.name || a.name || '')} {String(a.data?.surname || a.surname || '')}</h4>
+                      <p className="text-xs text-gray-500">{a.email || a.data?.email}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-center justify-between text-gray-600">
+                      <span className="flex items-center gap-2"><School className="h-4 w-4 text-gray-400" /> School</span>
+                      <span className="font-medium">{String(a.data?.schoolId || a.schoolId || '—')}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-gray-600">
+                      <span className="flex items-center gap-2"><MapPin className="h-4 w-4 text-gray-400" /> Zone</span>
+                      <span className="font-medium">{String(a.data?.zoneId || a.zoneId || '—')}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {filteredAdmins.length === 0 && <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">No school admins found</div>}
+            </div>
+          </div>
+        )}
+
+        {/* REFEREES TAB */}
+        {activeTab === 'referees' && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">All Referees</h3>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search referees..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              {filteredReferees.map((r) => (
+                <RefereeCard key={r.id} referee={r} badge={String(r.data?.zoneId || '—')} />
+              ))}
+              {filteredReferees.length === 0 && (
+                <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">
+                  No referees found
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

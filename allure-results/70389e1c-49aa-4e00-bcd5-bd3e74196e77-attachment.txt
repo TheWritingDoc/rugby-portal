@@ -1,0 +1,23 @@
+Debug info: {
+  totalPlayers: 698,
+  foundPlayer: true,
+  playerData: {
+    id: '08c10e60-45de-4001-b0ba-f1ed27f58b16',
+    zoneId: '1',
+    schoolId: 'uitenhage-gammel-street',
+    name: 'Test1767726577200',
+    surname: 'Spec1767726577200',
+    idNumber: null,
+    dateOfBirth: null,
+    gender: 'Male',
+    ageGroup: 'U19',
+    contactNumber: null,
+    email: 'coachplayer.1767726577200@example.com',
+    parentContact: null,
+    parentEmail: null,
+    data: '{"name":"Test1767726577200","surname":"Spec1767726577200","idNumber":"","dob":"2008-01-02","gender":"Male","phone":"0821234567","email":"coachplayer.1767726577200@example.com","zoneId":"1","schoolId":"uitenhage-gammel-street","ageGroup":"U19","photoUrl":"","address":"","emergencyContactName":"","emergencyContactNumber":"","parentName":"","parentSurname":"","relationship":"","parentContact":"","parentEmail":"","consentSignature":"","position":"","jerseyNumber":"","previousSchool":"","medicalAidName":"","medicalAidNumber":"","allergies":"","chronicConditions":"","medicalNotes":"","passwordHash":"$2b$10$5fbPSZchU1qIQuvne4kz6uDQkabEiLyilAmUXs2N7v6qELayDy942"}',
+    ts: 1767726577716
+  },
+  coachSchoolId: 'uitenhage-gammel-street',
+  coachZoneId: '1'
+}
