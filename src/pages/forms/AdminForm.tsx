@@ -1,3 +1,4 @@
+import { notifyError, notifySuccess } from '../../utils/notify'
 import { useEffect, useState } from 'react'
 import { ZoneSelect, SchoolSelect, AutoFields } from '../../components/Dropdowns'
 import { isEmail, isPhoneZA, isIdNumber } from '../../utils/validation'
@@ -34,9 +35,9 @@ export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coa
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     
-    if (email && !isEmail(email)) return alert('Invalid email')
-    if (phone && !isPhoneZA(phone)) return alert('Invalid phone number (+27 or 0XXXXXXXXX)')
-    if (idNumber && !isIdNumber(idNumber)) return alert('Invalid ID number')
+    if (email && !isEmail(email)) return notifyError('Invalid email')
+    if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
+    if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID number')
     const passwordHash = password ? bcrypt.hashSync(password, 10) : undefined
     const payload = { name, surname, idNumber, phone, email, role: roleSel, zoneId: zone, schoolId: school, passwordHash }
     await login('EPHSRUAdmin', zone, school)
@@ -44,7 +45,7 @@ export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coa
     if (!ok) addEntity('Admin', payload)
     addAudit({ id: crypto.randomUUID(), userRole: 'EPHSRUAdmin', entity: 'Admin', action: 'create', after: { name, surname, school, role: roleSel }, ts: Date.now() })
     clearDraft('admin')
-    alert('Admin registration submitted')
+    notifySuccess('Admin registration submitted')
   }
   return (
     <form className="space-y-3" onSubmit={submit}>

@@ -94,9 +94,19 @@ test('Player migration preserves data and logs history (Gammel Street -> Hillsid
     headers: { Authorization: `Bearer ${playerToken}`, 'Content-Type': 'application/json' },
     data: { toSchoolId: hillsideSchoolId, reason: 'self transfer' }
   })
-  expect(migrateRes.status(), 'migration should succeed for the player record owner').toBe(200)
+  expect(migrateRes.status(), 'migration request should succeed for the player record owner').toBe(200)
   const migrated = await migrateRes.json()
-  expect(String(migrated.migrationId || '')).toBeTruthy()
+  expect(String(migrated.requestId || '')).toBeTruthy()
+  expect(String(migrated.status || '')).toBe('pending')
+
+  // Migration is a request + approval flow: EPHSRU admin accepts the transfer
+  const decisionRes = await request.post(`http://localhost:4000/api/migration-requests/${migrated.requestId}/decision`, {
+    headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+    data: { status: 'accepted', reason: 'approved by test' }
+  })
+  expect(decisionRes.status(), 'migration approval should succeed').toBe(200)
+  const decided = await decisionRes.json()
+  expect(String(decided.migrationId || '')).toBeTruthy()
 
   const playerAfterRes = await request.get(`http://localhost:4000/api/players/${playerId}`, {
     headers: { Authorization: `Bearer ${adminToken}` }
@@ -114,7 +124,9 @@ test('Player migration preserves data and logs history (Gammel Street -> Hillsid
   expect(String(playerAfter.surname)).toBe(payload.surname)
   expect(String(playerAfter.email)).toBe(payload.email)
   expect(String(playerAfter.idNumber)).toBe(idNumber)
-  expect(String(afterData.registeredAt)).toBe(String(beforeData.registeredAt))
+  // Migration re-registers the player at the new school but preserves the original date
+  expect(String(afterData.originalRegisteredAt)).toBe(String(beforeData.registeredAt))
+  expect(Number(afterData.registeredAt)).toBeGreaterThanOrEqual(Number(beforeData.registeredAt))
   expect(String(afterData.initialSchoolId)).toBe(sourceSchoolId)
   expect(String(afterData.initialZoneId)).toBe(sourceZoneId)
 

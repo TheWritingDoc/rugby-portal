@@ -1,3 +1,4 @@
+import { notifyError, notifySuccess } from '../../utils/notify'
 import { useEffect, useMemo, useState } from 'react'
 import { ZoneSelect, SchoolSelect, AutoFields } from '../../components/Dropdowns'
 import { suggestAgeGroups } from '../../data/zones'
@@ -8,6 +9,7 @@ import { login } from '../../utils/auth'
 import { safePost, postJsonPath } from '../../utils/api'
 import { API_ORIGIN, apiUrl } from '../../utils/apiBase'
 import { loadDraft, saveDraft, clearDraft } from '../../utils/storage'
+import { resizeImage } from '../../utils/image'
 import bcrypt from 'bcryptjs'
 
 export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 'Player' | 'Referee' | 'Coach' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin'; onGoLogin?: () => void; onGoDashboard?: () => void }) {
@@ -35,6 +37,7 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
   const [parentEmail, setParentEmail] = useState('')
   const [consentSignature, setConsentSignature] = useState('')
   const [position, setPosition] = useState('')
+  const [ageGroup, setAgeGroup] = useState('')
   const [jerseyNumber, setJerseyNumber] = useState<string>('')
   const [previousSchool, setPreviousSchool] = useState('')
   const [medicalAidName, setMedicalAidName] = useState('')
@@ -84,12 +87,12 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
   const suggested = useMemo(() => suggestAgeGroups(dob, gender === '' ? undefined : gender), [dob, gender])
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (role && !['Player','Coach','SchoolAdmin','EPHSRUAdmin'].includes(role)) return alert('Not authorized')
-    if (email && !isEmail(email)) return alert('Invalid email')
-    if (phone && !isPhoneZA(phone)) return alert('Invalid phone number (+27 or 0XXXXXXXXX)')
-    if (idNumber && !isIdNumber(idNumber)) return alert('Invalid ID/Passport number')
+    if (role && !['Player','Coach','SchoolAdmin','EPHSRUAdmin'].includes(role)) return notifyError('Not authorized')
+    if (email && !isEmail(email)) return notifyError('Invalid email')
+    if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
+    if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID/Passport number')
     const passwordHash = password ? bcrypt.hashSync(password, 10) : undefined
-    const payload = { name, surname, idNumber, dob, gender, phone, email, zoneId: zone, schoolId: school, ageGroup: suggested[0], photoUrl, address, emergencyContactName, emergencyContactNumber, parentName, parentSurname, relationship, parentContact, parentEmail, consentSignature, position, jerseyNumber, previousSchool, medicalAidName, medicalAidNumber, allergies, chronicConditions, medicalNotes, passwordHash }
+    const payload = { name, surname, idNumber, dob, gender, phone, email, zoneId: zone, schoolId: school, ageGroup: ageGroup || suggested[0], photoUrl, address, emergencyContactName, emergencyContactNumber, parentName, parentSurname, relationship, parentContact, parentEmail, consentSignature, position, jerseyNumber, previousSchool, medicalAidName, medicalAidNumber, allergies, chronicConditions, medicalNotes, passwordHash }
     await login('Player', zone, school)
     try {
       localStorage.setItem('auth:role', 'Player')
@@ -100,12 +103,12 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
     if (!res.ok) {
       const err = (res.data as any)?.error || 'Registration failed'
       if (err === 'duplicate_idNumber') {
-        return alert('This ID/Passport number is already registered. Please contact your school to migrate the player if needed.')
+        return notifyError('This ID/Passport number is already registered. Please contact your school to migrate the player if needed.')
       }
       if (err === 'duplicate_email') {
-        return alert('This email is already registered. Please login instead.')
+        return notifyError('This email is already registered. Please login instead.')
       }
-      return alert(String(err))
+      return notifyError(String(err))
     }
     const serverId = (res.data as any)?.id || ''
     if (photoUrl && serverId) {
@@ -197,11 +200,13 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
               className="mt-1 w-full rounded-md border p-2"
               accept="image/*"
               onChange={async (e) => {
-                const file = e.target.files?.[0]
-                if (!file) return
+                const raw = e.target.files?.[0]
+                if (!raw) return
+                const file = await resizeImage(raw)
                 const fd = new FormData()
                 fd.append('file', file)
                 try {
+                  if (!localStorage.getItem('auth:token')) await login('Player', zone, school)
                   const t = localStorage.getItem('auth:token') || ''
                   const res = await fetch(apiUrl('/upload'), { method: 'POST', headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: fd })
                   if (res.ok) {
@@ -290,9 +295,9 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
           </label>
           <label className="block">
             <span className="text-sm font-medium">Age Group (auto-suggested)</span>
-            <select className="mt-1 w-full rounded-md border p-2">
+            <select className="mt-1 w-full rounded-md border p-2" value={ageGroup || suggested[0] || ''} onChange={(e) => setAgeGroup(e.target.value)}>
               {suggested.map((g) => (
-                <option key={g}>{g}</option>
+                <option key={g} value={g}>{g}</option>
               ))}
             </select>
           </label>

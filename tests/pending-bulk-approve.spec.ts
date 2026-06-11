@@ -54,7 +54,7 @@ test('Coach Pending tab supports batch approval of selected players', async ({ p
   await loginForm.getByRole('button', { name: 'Sign In' }).click()
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
 
-  const btnPending = page.getByRole('button', { name: /Pending Reviews/ })
+  const btnPending = page.getByRole('button', { name: /^Pending \(/ })
   await btnPending.click()
 
   await expect(page.getByText('Loading pending players...')).toBeHidden({ timeout: 15000 }).catch(() => {})
@@ -75,15 +75,13 @@ test('Coach Pending tab supports batch approval of selected players', async ({ p
   await expect(approveSelected).toBeEnabled()
   await approveSelected.click()
 
-  const verify1 = await request.get(`http://localhost:4000/api/players/${p1}`, { headers: { Authorization: `Bearer ${coachToken}` } })
-  const row1 = await verify1.json()
-  const d1 = typeof row1.data === 'string' ? JSON.parse(row1.data) : row1.data || {}
-  expect(d1.status).toBe('approved')
-  expect(d1.needsReview).toBeFalsy()
-
-  const verify2 = await request.get(`http://localhost:4000/api/players/${p2}`, { headers: { Authorization: `Bearer ${coachToken}` } })
-  const row2 = await verify2.json()
-  const d2 = typeof row2.data === 'string' ? JSON.parse(row2.data) : row2.data || {}
-  expect(d2.status).toBe('approved')
-  expect(d2.needsReview).toBeFalsy()
+  // The bulk approval applies asynchronously — poll until both players flip to approved
+  for (const pid of [p1, p2]) {
+    await expect.poll(async () => {
+      const res = await request.get(`http://localhost:4000/api/players/${pid}`, { headers: { Authorization: `Bearer ${coachToken}` } })
+      const row = await res.json()
+      const d = typeof row.data === 'string' ? JSON.parse(row.data) : row.data || {}
+      return `${d.status}:${d.needsReview ? 'review' : 'clear'}`
+    }, { timeout: 15000 }).toBe('approved:clear')
+  }
 })

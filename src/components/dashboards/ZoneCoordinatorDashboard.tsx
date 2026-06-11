@@ -13,6 +13,8 @@ import { login } from '../../utils/auth'
 import PlayerCard from '../PlayerCard'
 import SchoolCard from '../SchoolCard'
 import RefereeCard from '../RefereeCard'
+import CoachCard from '../CoachCard'
+import { zoneNameOf } from '../../utils/labels'
 import PlayerProfileModal from '../modals/PlayerProfileModal'
 
 interface ZoneCoordinatorDashboardProps {
@@ -46,15 +48,15 @@ export default function ZoneCoordinatorDashboard({
     name: '', surname: '', email: '', phone: ''
   })
 
-  // Get current user details from local storage or context if available
+  // Get current user details from local storage
   const [currentUser, setCurrentUser] = useState<any>(null)
 
   useEffect(() => {
     try {
-      const userStr = localStorage.getItem('user')
-      if (userStr) {
-        setCurrentUser(JSON.parse(userStr))
-      }
+      const name = localStorage.getItem('auth:name') || ''
+      const surname = localStorage.getItem('auth:surname') || ''
+      const email = localStorage.getItem('auth:email') || ''
+      setCurrentUser({ name, surname, email })
     } catch (e) {
       console.error('Failed to load user profile', e)
     }
@@ -229,15 +231,7 @@ export default function ZoneCoordinatorDashboard({
               </h3>
               <div className="space-y-3">
                 {schoolCoaches.map(coach => (
-                  <div key={coach.id} className="flex items-center gap-3 p-3 bg-purple-50 rounded-lg border border-purple-100">
-                    <div className="h-10 w-10 rounded-full bg-purple-200 flex items-center justify-center text-purple-700 font-bold">
-                      {(coach.data?.name?.[0] || '')}{(coach.data?.surname?.[0] || '')}
-                    </div>
-                    <div>
-                      <div className="font-medium text-gray-900">{coach.data?.name} {coach.data?.surname}</div>
-                      <div className="text-sm text-gray-500">{coach.data?.email}</div>
-                    </div>
-                  </div>
+                  <CoachCard key={coach.id} coach={coach} />
                 ))}
                 {schoolCoaches.length === 0 && <p className="text-gray-500 italic">No coaches assigned</p>}
               </div>
@@ -289,7 +283,7 @@ export default function ZoneCoordinatorDashboard({
                 <div className="flex items-center gap-3 mb-2">
                   <span className="bg-white/20 px-3 py-1 rounded-full text-xs font-medium backdrop-blur-sm border border-white/10">Zone Administration</span>
                 </div>
-                <h1 className="text-3xl font-bold mb-1">Zone {zone || 'Dashboard'}</h1>
+                <h1 className="text-3xl font-bold mb-1">{zone ? zoneNameOf(zone) : 'Zone Dashboard'}</h1>
                 <div className="text-xl text-emerald-100 font-medium mb-2">
                   Coordinator: {currentUser?.name} {currentUser?.surname}
                 </div>

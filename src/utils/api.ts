@@ -93,6 +93,16 @@ export async function postJson(entity: 'schools' | 'players' | 'coaches' | 'refe
   }
 }
 
+export async function deleteJson(entity: 'schools' | 'players' | 'coaches' | 'referees' | 'admins', id: string) {
+  try {
+    const t = localStorage.getItem('auth:token')
+    const res = await fetch(`${API_BASE}/${entity}/${id}`, { method: 'DELETE', headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) } })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 export async function fetchOne(entity: 'schools' | 'players' | 'coaches' | 'referees' | 'admins', id: string) {
   try {
     const t = localStorage.getItem('auth:token')

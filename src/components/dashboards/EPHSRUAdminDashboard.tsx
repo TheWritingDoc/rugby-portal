@@ -1,12 +1,17 @@
 import { useState, useMemo, useEffect } from 'react'
-import { 
-  Users, UserCheck, School, MapPin, Shield, Activity, 
-  TrendingUp, AlertCircle, CheckCircle, XCircle, Search,
-  Download, Plus, Edit, Trash2, BarChart3, Settings, 
-  FileText, Globe, UserCog, Filter, MoreHorizontal, 
-  ChevronRight, ChevronLeft, Award, Clock, CheckSquare, Crown, Database,
-  PieChart as PieChartIcon, Eye, List as ListIcon, LayoutGrid
+import {
+  Users, UserCheck, School, MapPin, Shield, Activity,
+  AlertCircle, CheckCircle, XCircle, Search,
+  Download, Plus, BarChart3,
+  FileText, Globe, UserCog, MoreHorizontal,
+  ChevronRight, ChevronLeft, Award, Clock, CheckSquare, Crown,
+  PieChart as PieChartIcon, Eye, List as ListIcon, LayoutGrid,
+  Mail, Phone
 } from 'lucide-react'
+import { apiUrl } from '../../utils/apiBase'
+import { getToken } from '../../utils/auth'
+import { notifyError } from '../../utils/notify'
+import { CoachAvatar } from '../CoachCard'
 
 interface EPHSRUAdminDashboardProps {
   zones: any[]
@@ -27,6 +32,17 @@ interface PendingApproval {
   submittedAt: string
 }
 
+// Tailwind cannot see dynamically-built class names, so each accent color is mapped to static classes
+const ACCENT: Record<string, { soft: string; softHover: string; tint: string; solid: string; icon: string; text: string; deep: string }> = {
+  indigo: { soft: 'bg-indigo-50', softHover: 'hover:bg-indigo-100', tint: 'bg-indigo-100', solid: 'bg-indigo-600', icon: 'text-indigo-600', text: 'text-indigo-600', deep: 'text-indigo-900' },
+  purple: { soft: 'bg-purple-50', softHover: 'hover:bg-purple-100', tint: 'bg-purple-100', solid: 'bg-purple-600', icon: 'text-purple-600', text: 'text-purple-600', deep: 'text-purple-900' },
+  blue:   { soft: 'bg-blue-50',   softHover: 'hover:bg-blue-100',   tint: 'bg-blue-100',   solid: 'bg-blue-600',   icon: 'text-blue-600',   text: 'text-blue-600',   deep: 'text-blue-900' },
+  green:  { soft: 'bg-green-50',  softHover: 'hover:bg-green-100',  tint: 'bg-green-100',  solid: 'bg-green-600',  icon: 'text-green-600',  text: 'text-green-600',  deep: 'text-green-900' },
+  amber:  { soft: 'bg-amber-50',  softHover: 'hover:bg-amber-100',  tint: 'bg-amber-100',  solid: 'bg-amber-600',  icon: 'text-amber-600',  text: 'text-amber-600',  deep: 'text-amber-900' },
+  rose:   { soft: 'bg-rose-50',   softHover: 'hover:bg-rose-100',   tint: 'bg-rose-100',   solid: 'bg-rose-600',   icon: 'text-rose-600',   text: 'text-rose-600',   deep: 'text-rose-900' },
+  gray:   { soft: 'bg-gray-50',   softHover: 'hover:bg-gray-100',   tint: 'bg-gray-100',   solid: 'bg-gray-600',   icon: 'text-gray-600',   text: 'text-gray-600',   deep: 'text-gray-900' },
+}
+
 export default function EPHSRUAdminDashboard({ 
   zones, schools, players, coaches, referees, admins, onRefresh 
 }: EPHSRUAdminDashboardProps) {
@@ -34,6 +50,16 @@ export default function EPHSRUAdminDashboard({
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedZone, setSelectedZone] = useState('')
   const [selectedZoneDetail, setSelectedZoneDetail] = useState<any>(null)
+  const [selectedSchoolDetail, setSelectedSchoolDetail] = useState<any>(null)
+  const [hideUnregistered, setHideUnregistered] = useState(false)
+
+  useEffect(() => {
+    // Reset drill-down states when changing main tabs
+    if (activeTab !== 'schools') {
+      setSelectedZone('')
+      setSelectedSchoolDetail(null)
+    }
+  }, [activeTab])
   const [resultsView, setResultsView] = useState<'cards' | 'list'>(() => {
     try {
       return localStorage.getItem('ephsru:approvals:view') === 'list' ? 'list' : 'cards'
@@ -63,11 +89,59 @@ export default function EPHSRUAdminDashboard({
     }, {} as Record<string, number>)
   }), [zones, schools, players, coaches, referees, admins])
 
-  const pendingApprovals: PendingApproval[] = [
-    { id: '1', type: 'player', name: 'John Smith', school: 'Grey High', zone: 'Zone A', submittedAt: '2026-02-01' },
-    { id: '2', type: 'school', name: 'Victoria Park High', zone: 'Zone B', submittedAt: '2026-02-01' },
-    { id: '3', type: 'coach', name: 'Sarah Johnson', school: 'Grey High', zone: 'Zone A', submittedAt: '2026-01-31' },
-  ]
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([])
+  const [approvalsLoading, setApprovalsLoading] = useState(false)
+  const [decidingId, setDecidingId] = useState<string>('')
+
+  async function loadApprovals() {
+    setApprovalsLoading(true)
+    try {
+      const res = await fetch(apiUrl('/approvals?status=pending&pageSize=100'), {
+        headers: { Authorization: `Bearer ${getToken()}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        const rows = Array.isArray(data?.rows) ? data.rows : []
+        setPendingApprovals(rows.map((r: any) => ({
+          id: String(r.id),
+          type: r.entityType === 'players' ? 'player' as const : 'school' as const,
+          name: r.player ? `${r.player.name} ${r.player.surname}`.trim() || r.entityId : r.entityId,
+          school: r.player?.schoolId || '',
+          zone: r.player?.zoneId || '',
+          submittedAt: r.createdAt ? new Date(Number(r.createdAt)).toLocaleDateString() : '',
+        })))
+      } else {
+        notifyError('Could not load pending approvals')
+      }
+    } catch {
+      notifyError('Could not load pending approvals')
+    }
+    setApprovalsLoading(false)
+  }
+
+  useEffect(() => { loadApprovals() }, [])
+
+  async function decideApproval(id: string, status: 'approved' | 'rejected') {
+    setDecidingId(id)
+    try {
+      const res = await fetch(apiUrl(`/approvals/${encodeURIComponent(id)}/decision`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({ status })
+      })
+      if (res.ok) {
+        setPendingApprovals((prev) => prev.filter((a) => a.id !== id))
+        onRefresh()
+      }
+    } catch {}
+    setDecidingId('')
+  }
+
+  async function approveAll() {
+    for (const a of pendingApprovals) {
+      await decideApproval(a.id, 'approved')
+    }
+  }
 
   const getApprovalIcon = (type: string) => {
     switch (type) {
@@ -194,12 +268,12 @@ export default function EPHSRUAdminDashboard({
                 <Crown className="h-8 w-8 text-purple-200" />
                 <span className="text-purple-100 text-sm font-medium uppercase tracking-wider">System Administration</span>
               </div>
-              <h1 className="text-3xl font-bold mb-2">EPHSRU Administration</h1>
+              <h1 className="text-3xl font-bold mb-2">EPHSRU Dashboard</h1>
               <p className="text-purple-100">Eastern Province High Schools Rugby Union</p>
               <div className="flex items-center gap-4 mt-4 text-sm text-purple-100">
                 <span className="flex items-center gap-1"><Globe className="h-4 w-4" />{stats.totalZones} Zones</span>
                 <span>•</span>
-                <span className="flex items-center gap-1"><School className="h-4 w-4" />{stats.totalSchools} Schools</span>
+                <span className="flex items-center gap-1"><School className="h-4 w-4" />{stats.totalSchools} Registered Schools</span>
                 <span>•</span>
                 <span className="flex items-center gap-1"><Users className="h-4 w-4" />{stats.totalPlayers.toLocaleString()} Players</span>
               </div>
@@ -217,16 +291,19 @@ export default function EPHSRUAdminDashboard({
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {[
-          { icon: MapPin, label: 'Zones', value: stats.totalZones, color: 'indigo' },
-          { icon: School, label: 'Schools', value: stats.totalSchools, color: 'purple' },
-          { icon: Users, label: 'Players', value: stats.totalPlayers, color: 'blue' },
-          { icon: UserCheck, label: 'Coaches', value: stats.totalCoaches, color: 'green' },
-          { icon: Award, label: 'Referees', value: stats.totalReferees, color: 'amber' },
-          { icon: Shield, label: 'Admins', value: stats.totalAdmins, color: 'rose' }
+          { icon: MapPin, label: 'Zones', value: stats.totalZones, color: 'indigo', tab: 'zones' },
+          { icon: School, label: 'Schools', value: stats.totalSchools, color: 'purple', tab: 'schools' },
+          { icon: Users, label: 'Players', value: stats.totalPlayers, color: 'blue', tab: 'users' },
+          { icon: UserCheck, label: 'Coaches', value: stats.totalCoaches, color: 'green', tab: 'users' },
+          { icon: Award, label: 'Referees', value: stats.totalReferees, color: 'amber', tab: 'users' },
+          { icon: Shield, label: 'Admins', value: stats.totalAdmins, color: 'rose', tab: 'users' }
         ].map((stat) => (
-          <div key={stat.label} className="rounded-xl border bg-white p-4 shadow-sm hover:shadow-md transition-shadow">
-            <div className={`rounded-lg bg-${stat.color}-50 p-2 w-fit mb-3`}>
-              <stat.icon className={`h-5 w-5 text-${stat.color}-600`} />
+          <div key={stat.label}
+            className="rounded-xl border bg-white p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+            onClick={() => setActiveTab(stat.tab as any || 'overview')}
+          >
+            <div className={`rounded-lg ${(ACCENT[stat.color] || ACCENT.gray).soft} p-2 w-fit mb-3`}>
+              <stat.icon className={`h-5 w-5 ${(ACCENT[stat.color] || ACCENT.gray).icon}`} />
             </div>
             <div className="text-2xl font-bold text-gray-900">{stat.value.toLocaleString()}</div>
             <div className="text-sm text-gray-500">{stat.label}</div>
@@ -251,7 +328,7 @@ export default function EPHSRUAdminDashboard({
               }`}>
               <tab.icon className="h-4 w-4" />
               {tab.label}
-              {'badge' in tab && tab.badge > 0 && (
+              {'badge' in tab && (tab.badge ?? 0) > 0 && (
                 <span className="ml-1 px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full">{tab.badge}</span>
               )}
             </button>
@@ -266,21 +343,28 @@ export default function EPHSRUAdminDashboard({
             {/* Quick Actions */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               {[
-                { icon: Plus, label: 'Add Zone', desc: 'Create new zone', color: 'indigo' },
-                { icon: School, label: 'Add School', desc: 'Register school', color: 'purple' },
-                { icon: UserCog, label: 'Manage Users', desc: 'View all users', color: 'blue' },
-                { icon: Download, label: 'Export Data', desc: 'Download reports', color: 'green' }
-              ].map((action) => (
-                <button key={action.label} className={`flex items-center gap-3 p-4 bg-${action.color}-50 hover:bg-${action.color}-100 rounded-xl transition-colors text-left`}>
-                  <div className={`p-3 bg-${action.color}-600 text-white rounded-lg`}>
-                    <action.icon className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className={`font-medium text-${action.color}-900`}>{action.label}</div>
-                    <div className={`text-sm text-${action.color}-600`}>{action.desc}</div>
-                  </div>
-                </button>
-              ))}
+                { icon: MapPin, label: 'Browse Zones', desc: 'View all zones', color: 'indigo', tab: 'zones' },
+                { icon: School, label: 'Browse Schools', desc: 'Drill into schools', color: 'purple', tab: 'schools' },
+                { icon: UserCog, label: 'Manage Users', desc: 'View all users', color: 'blue', tab: 'users' },
+                { icon: CheckSquare, label: 'Review Approvals', desc: 'Decide pending requests', color: 'green', tab: 'approvals' }
+              ].map((action) => {
+                const c = ACCENT[action.color] || ACCENT.gray
+                return (
+                  <button
+                    key={action.label}
+                    onClick={() => setActiveTab(action.tab as any)}
+                    className={`flex items-center gap-3 p-4 ${c.soft} ${c.softHover} rounded-xl transition-colors text-left`}
+                  >
+                    <div className={`p-3 ${c.solid} text-white rounded-lg`}>
+                      <action.icon className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className={`font-medium ${c.deep}`}>{action.label}</div>
+                      <div className={`text-sm ${c.text}`}>{action.desc}</div>
+                    </div>
+                  </button>
+                )
+              })}
             </div>
 
             {/* Age Group Chart */}
@@ -321,17 +405,20 @@ export default function EPHSRUAdminDashboard({
                     { icon: CheckCircle, label: 'Approved', value: stats.approvedPlayers, color: 'green' },
                     { icon: Clock, label: 'Pending', value: stats.pendingPlayers, color: stats.pendingPlayers > 0 ? 'amber' : 'gray' },
                     { icon: Users, label: 'Total Users', value: stats.totalPlayers + stats.totalCoaches + stats.totalReferees + stats.totalAdmins, color: 'blue' }
-                  ].map((stat) => (
-                    <div key={stat.label} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <div className={`p-2 bg-${stat.color}-100 rounded-lg`}>
-                          <stat.icon className={`h-4 w-4 text-${stat.color}-600`} />
+                  ].map((stat) => {
+                    const c = ACCENT[stat.color] || ACCENT.gray
+                    return (
+                      <div key={stat.label} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                        <div className="flex items-center gap-3">
+                          <div className={`p-2 ${c.tint} rounded-lg`}>
+                            <stat.icon className={`h-4 w-4 ${c.icon}`} />
+                          </div>
+                          <span className="text-gray-600">{stat.label}</span>
                         </div>
-                        <span className="text-gray-600">{stat.label}</span>
+                        <span className={`text-2xl font-bold ${c.text}`}>{stat.value.toLocaleString()}</span>
                       </div>
-                      <span className={`text-2xl font-bold text-${stat.color}-600`}>{stat.value.toLocaleString()}</span>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             </div>
@@ -362,12 +449,17 @@ export default function EPHSRUAdminDashboard({
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"><CheckCircle className="h-5 w-5" /></button>
-                        <button className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"><XCircle className="h-5 w-5" /></button>
+                        <button aria-label="Approve" disabled={decidingId === approval.id} onClick={() => decideApproval(approval.id, 'approved')} className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50"><CheckCircle className="h-5 w-5" /></button>
+                        <button aria-label="Reject" disabled={decidingId === approval.id} onClick={() => decideApproval(approval.id, 'rejected')} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"><XCircle className="h-5 w-5" /></button>
                       </div>
                     </div>
                   )
                 })}
+                {pendingApprovals.length === 0 && (
+                  <div className="flex items-center gap-3 p-4 bg-green-50 rounded-lg text-green-700 text-sm">
+                    <CheckCircle className="h-5 w-5" /> All caught up — no pending approvals.
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -381,9 +473,7 @@ export default function EPHSRUAdminDashboard({
                 <input type="text" placeholder="Search zones..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:border-indigo-500 focus:ring-indigo-500" />
               </div>
-              <button className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-                <Plus className="h-4 w-4" /> Add Zone
-              </button>
+              <div className="text-sm text-gray-500">{zones.length} zones</div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {zones.map((zone) => (
@@ -415,49 +505,389 @@ export default function EPHSRUAdminDashboard({
 
         {activeTab === 'schools' && (
           <div className="space-y-6">
-            <div className="flex items-center gap-4">
-              <select value={selectedZone} onChange={(e) => setSelectedZone(e.target.value)} className="rounded-lg border-gray-300">
-                <option value="">All Zones</option>
-                {zones.map(z => <option key={z.id} value={z.id}>{z.data?.name || z.name}</option>)}
-              </select>
-              <div className="relative flex-1 max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input type="text" placeholder="Search schools..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300" />
-              </div>
-              <button className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-                <Plus className="h-4 w-4" /> Add School
-              </button>
-            </div>
-            <div className="rounded-xl border bg-white shadow-sm overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">School</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Zone</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Players</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Coaches</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {schools.filter(s => !selectedZone || s.data?.zoneId === selectedZone).map((school) => (
-                    <tr key={school.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center"><School className="h-5 w-5 text-indigo-600" /></div>
-                          <span className="font-medium text-gray-900">{school.data?.name || school.name}</span>
+            {!selectedZone && !selectedSchoolDetail && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">Zone Coordinators</h2>
+                    <p className="text-sm text-gray-500">Select a coordinator to view their schools</p>
+                  </div>
+                  <div className="relative w-64">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <input type="text" placeholder="Search zones..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:ring-indigo-500 focus:border-indigo-500" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {zones.filter(z => (z.data?.name || z.name || '').toLowerCase().includes(searchQuery.toLowerCase())).map(zone => {
+                    const coordinator = admins.find(a => a.role === 'ZoneCoordinator' && String(a.data?.zoneId || a.zoneId) === String(zone.id));
+                    const schoolCount = schools.filter(s => String(s.data?.zoneId || s.zoneId) === String(zone.id)).length;
+                    
+                    return (
+                      <div key={zone.id} 
+                        onClick={() => setSelectedZone(zone.id)}
+                        className="group relative overflow-hidden rounded-xl border bg-white p-6 shadow-sm hover:shadow-md transition-all cursor-pointer hover:border-indigo-200"
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="p-3 bg-indigo-100 rounded-lg group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                            <MapPin className="h-6 w-6 text-indigo-600 group-hover:text-white" />
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Schools</span>
+                            <div className="text-2xl font-bold text-gray-900">{schoolCount}</div>
+                          </div>
                         </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500">{zones.find(z => z.id === school.data?.zoneId)?.data?.name || '—'}</td>
-                      <td className="px-6 py-4 font-semibold">{players.filter(p => p.data?.schoolId === school.id).length}</td>
-                      <td className="px-6 py-4">{coaches.filter(c => c.data?.schoolId === school.id).length}</td>
-                      <td className="px-6 py-4"><button className="text-indigo-600 hover:text-indigo-900 text-sm font-medium">View</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                        <h3 className="text-lg font-bold text-gray-900 mb-1">{zone.data?.name || zone.name}</h3>
+                        <div className="mt-4 pt-4 border-t border-gray-100">
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 font-bold overflow-hidden">
+                              {coordinator ? (
+                                <span>{(coordinator.data?.name?.[0] || '')}{(coordinator.data?.surname?.[0] || '')}</span>
+                              ) : (
+                                <Users className="h-5 w-5" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="text-sm font-medium text-gray-900">
+                                {coordinator ? `${coordinator.data?.name} ${coordinator.data?.surname}` : 'No Coordinator'}
+                              </div>
+                              <div className="text-xs text-gray-500">Zone Coordinator</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {selectedZone && !selectedSchoolDetail && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => setSelectedZone('')} className="p-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors">
+                      <ChevronLeft className="h-5 w-5" />
+                    </button>
+                    <div>
+                      <h2 className="text-xl font-bold text-gray-900">
+                        {zones.find(z => String(z.id) === String(selectedZone))?.data?.name || 'Zone'} Schools
+                      </h2>
+                      <p className="text-sm text-gray-500">Select a school to manage details</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                     <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none bg-gray-50 px-3 py-2 rounded-lg border">
+                        <input 
+                          type="checkbox" 
+                          checked={hideUnregistered} 
+                          onChange={(e) => setHideUnregistered(e.target.checked)} 
+                          className="rounded text-indigo-600 focus:ring-indigo-500" 
+                        />
+                        Hide Unregistered
+                     </label>
+                  </div>
+                </div>
+
+                {/* Zone Coordinator Info */}
+                {(() => {
+                  const zone = zones.find(z => String(z.id) === String(selectedZone))
+                  const coordinator = admins.find(a => a.role === 'ZoneCoordinator' && String(a.data?.zoneId || a.zoneId) === String(selectedZone))
+                  
+                  if (!coordinator) return (
+                    <div className="rounded-xl border border-dashed p-6 bg-gray-50 flex items-center justify-center gap-3 text-gray-500">
+                      <Users className="h-5 w-5" />
+                      <span>No Zone Coordinator assigned to this zone.</span>
+                    </div>
+                  )
+
+                  return (
+                    <div className="rounded-xl border bg-white p-6 shadow-sm flex items-start gap-6">
+                      <div className="h-20 w-20 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-2xl font-bold border-4 border-white shadow-sm">
+                        {(coordinator.data?.name?.[0] || '')}{(coordinator.data?.surname?.[0] || '')}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h3 className="text-xl font-bold text-gray-900">{coordinator.data?.name} {coordinator.data?.surname}</h3>
+                          <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold uppercase">Zone Coordinator</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-y-2 gap-x-8 text-sm text-gray-600 mt-2">
+                          <div className="flex items-center gap-2">
+                            <Mail className="h-4 w-4 text-gray-400" />
+                            {coordinator.data?.email || coordinator.email}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Phone className="h-4 w-4 text-gray-400" />
+                            {coordinator.data?.phone || 'No phone number'}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <MapPin className="h-4 w-4 text-gray-400" />
+                            {zone?.data?.name || 'Unknown Zone'}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <School className="h-4 w-4 text-gray-400" />
+                            {schools.filter(s => String(s.data?.zoneId || s.zoneId) === String(selectedZone)).length} Schools Managed
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {schools
+                    .filter(s => String(s.data?.zoneId || s.zoneId) === String(selectedZone))
+                    .filter(s => {
+                       if (!hideUnregistered) return true;
+                       // A school is considered "registered" if it has active players/coaches/admins or explicitly marked
+                       const sPlayers = players.filter(p => String(p.data?.schoolId || p.schoolId) === String(s.id)).length
+                       const sCoaches = coaches.filter(c => String(c.data?.schoolId || c.schoolId) === String(s.id)).length
+                       const sAdmins = admins.filter(a => String(a.data?.schoolId || a.schoolId) === String(s.id)).length
+                       return sPlayers > 0 || sCoaches > 0 || sAdmins > 0
+                    })
+                    .map(school => {
+                       const sPlayers = players.filter(p => String(p.data?.schoolId || p.schoolId) === String(school.id)).length
+                       const sCoaches = coaches.filter(c => String(c.data?.schoolId || c.schoolId) === String(school.id)).length
+                       const sAdmins = admins.filter(a => String(a.data?.schoolId || a.schoolId) === String(school.id)).length
+                       const isRegistered = sPlayers > 0 || sCoaches > 0 || sAdmins > 0
+
+                       return (
+                    <div key={school.id} 
+                      onClick={() => setSelectedSchoolDetail(school)}
+                      className={`group relative overflow-hidden rounded-xl border p-6 shadow-sm hover:shadow-md transition-all cursor-pointer ${isRegistered ? 'bg-white hover:border-purple-200' : 'bg-gray-50 border-gray-200 opacity-80'}`}
+                    >
+                      {!isRegistered && (
+                        <div className="absolute top-2 right-2 px-2 py-0.5 bg-gray-200 text-gray-600 text-[10px] font-bold uppercase rounded">Unregistered</div>
+                      )}
+                      {isRegistered && (
+                        <div className="absolute top-2 right-2 px-2 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold uppercase rounded">Registered</div>
+                      )}
+
+                      <div className="flex items-center gap-4 mb-4">
+                        <div className={`h-12 w-12 rounded-full flex items-center justify-center transition-colors ${isRegistered ? 'bg-purple-50 group-hover:bg-purple-600' : 'bg-gray-200'}`}>
+                          <School className={`h-6 w-6 ${isRegistered ? 'text-purple-600 group-hover:text-white' : 'text-gray-400'}`} />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-gray-900 line-clamp-1">{school.data?.name || school.name}</h3>
+                          <div className="text-xs text-gray-500">ID: {school.schoolId || school.id.slice(0,8)}</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center text-sm border-t pt-4">
+                        <div>
+                          <div className="font-bold text-gray-900">{sAdmins}</div>
+                          <div className="text-xs text-gray-500">Admins</div>
+                        </div>
+                        <div className="border-l">
+                          <div className="font-bold text-gray-900">{sCoaches}</div>
+                          <div className="text-xs text-gray-500">Coaches</div>
+                        </div>
+                        <div className="border-l">
+                          <div className="font-bold text-gray-900">{sPlayers}</div>
+                          <div className="text-xs text-gray-500">Players</div>
+                        </div>
+                      </div>
+                    </div>
+                  )})}
+                  {schools.filter(s => String(s.data?.zoneId || s.zoneId) === String(selectedZone)).length === 0 && (
+                    <div className="col-span-full py-12 text-center text-gray-500 border-2 border-dashed rounded-xl bg-gray-50">
+                      <School className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                      <p>No schools found in this zone.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {selectedSchoolDetail && (
+              <div className="space-y-6">
+                <div className="flex items-center gap-4">
+                  <button onClick={() => setSelectedSchoolDetail(null)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors">
+                    <ChevronLeft className="h-5 w-5" />
+                  </button>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">{selectedSchoolDetail.data?.name || selectedSchoolDetail.name}</h2>
+                    <p className="text-sm text-gray-500">School Management Dashboard</p>
+                  </div>
+                </div>
+
+                {/* Hierarchical View: Coaches by Age Group -> Players */}
+                <div className="space-y-6">
+                   {['U14', 'U15', 'U16', 'U17', 'U19'].map(ageGroup => {
+                      const ageGroupCoaches = coaches.filter(c => 
+                         String(c.data?.schoolId || c.schoolId) === String(selectedSchoolDetail.id) && 
+                         (c.data?.team === ageGroup || c.data?.ageGroup === ageGroup)
+                      );
+                      
+                      const ageGroupPlayers = players.filter(p => 
+                         String(p.data?.schoolId || p.schoolId) === String(selectedSchoolDetail.id) &&
+                         (p.data?.team === ageGroup || p.data?.ageGroup === ageGroup)
+                      );
+
+                      if (ageGroupCoaches.length === 0 && ageGroupPlayers.length === 0) return null;
+
+                      return (
+                        <div key={ageGroup} className="rounded-xl border bg-white overflow-hidden shadow-sm">
+                           <div className="bg-gray-50 px-6 py-3 border-b flex items-center justify-between">
+                              <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                 <Users className="h-5 w-5 text-indigo-600" />
+                                 {ageGroup} Team
+                              </h3>
+                              <div className="text-sm text-gray-500">
+                                 {ageGroupCoaches.length} Coach{ageGroupCoaches.length !== 1 ? 'es' : ''} • {ageGroupPlayers.length} Player{ageGroupPlayers.length !== 1 ? 's' : ''}
+                              </div>
+                           </div>
+                           
+                           <div className="p-6">
+                              {/* Coaches Section */}
+                              <div className="mb-6">
+                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Coaches</h4>
+                                 {ageGroupCoaches.length > 0 ? (
+                                    <div className="grid grid-cols-1 gap-4">
+                                       {ageGroupCoaches.map(coach => (
+                                          <div key={coach.id} className="rounded-lg border bg-white overflow-hidden">
+                                             <div className="flex items-center gap-3 p-3 bg-green-50 border-b border-green-100">
+                                                <CoachAvatar coach={coach} size="md" />
+                                                <div>
+                                                   <div className="font-medium text-gray-900">{coach.data?.name} {coach.data?.surname}</div>
+                                                   <div className="text-xs text-gray-500">
+                                                      {coach.data?.position || 'Coach'} • {coach.data?.email || coach.email}
+                                                      {coach.data?.qualifications && coach.data.qualifications !== 'None' ? ` • ${coach.data.qualifications}` : ''}
+                                                   </div>
+                                                </div>
+                                             </div>
+                                             
+                                             {/* Players under this coach (in this age group) */}
+                                             <div className="p-0">
+                                                {ageGroupPlayers.length > 0 ? (
+                                                   <table className="w-full text-sm">
+                                                      <thead className="bg-gray-50 text-xs">
+                                                         <tr>
+                                                            <th className="px-4 py-2 text-left font-medium text-gray-500 pl-12">Player Name</th>
+                                                            <th className="px-4 py-2 text-left font-medium text-gray-500">Position</th>
+                                                            <th className="px-4 py-2 text-left font-medium text-gray-500">Status</th>
+                                                            <th className="px-4 py-2 text-right font-medium text-gray-500">Action</th>
+                                                         </tr>
+                                                      </thead>
+                                                      <tbody className="divide-y divide-gray-100">
+                                                         {ageGroupPlayers.map(player => (
+                                                            <tr key={player.id} className="hover:bg-gray-50">
+                                                               <td className="px-4 py-2 pl-12">
+                                                                  <div className="font-medium text-gray-900">{player.data?.name} {player.data?.surname}</div>
+                                                               </td>
+                                                               <td className="px-4 py-2 text-gray-600">{player.data?.position || '—'}</td>
+                                                               <td className="px-4 py-2">
+                                                                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                                                     (player.data?.status || 'active') === 'active' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                                                                  }`}>
+                                                                     {player.data?.status || 'Active'}
+                                                                  </span>
+                                                               </td>
+                                                               <td className="px-4 py-2 text-right">
+                                                                  <button className="text-indigo-600 hover:text-indigo-900 font-medium text-xs">View</button>
+                                                               </td>
+                                                            </tr>
+                                                         ))}
+                                                      </tbody>
+                                                   </table>
+                                                ) : (
+                                                   <div className="p-4 text-center text-sm text-gray-400 italic">No players assigned to this team yet.</div>
+                                                )}
+                                             </div>
+                                          </div>
+                                       ))}
+                                    </div>
+                                 ) : (
+                                    <div className="text-sm text-gray-400 italic mb-4">No coaches assigned to {ageGroup}</div>
+                                 )}
+                                 
+                                 {/* Fallback for players if no coach exists to "hold" them */}
+                                 {ageGroupCoaches.length === 0 && ageGroupPlayers.length > 0 && (
+                                    <div className="mt-4 rounded-lg border bg-white overflow-hidden">
+                                       <div className="p-3 bg-gray-50 border-b border-gray-200 text-sm font-medium text-gray-700">Players (No Coach Assigned)</div>
+                                       <table className="w-full text-sm">
+                                          <tbody className="divide-y divide-gray-100">
+                                             {ageGroupPlayers.map(player => (
+                                                <tr key={player.id} className="hover:bg-gray-50">
+                                                   <td className="px-4 py-2">
+                                                      <div className="font-medium text-gray-900">{player.data?.name} {player.data?.surname}</div>
+                                                   </td>
+                                                   <td className="px-4 py-2 text-gray-600">{player.data?.position || '—'}</td>
+                                                   <td className="px-4 py-2">
+                                                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                                         (player.data?.status || 'active') === 'active' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                                                      }`}>
+                                                         {player.data?.status || 'Active'}
+                                                      </span>
+                                                   </td>
+                                                   <td className="px-4 py-2 text-right">
+                                                      <button className="text-indigo-600 hover:text-indigo-900 font-medium text-xs">View</button>
+                                                   </td>
+                                                </tr>
+                                             ))}
+                                          </tbody>
+                                       </table>
+                                    </div>
+                                 )}
+                              </div>
+                           </div>
+                        </div>
+                      )
+                   })}
+
+                   {/* Unassigned / Other Section */}
+                   {(() => {
+                      const unassignedCoaches = coaches.filter(c => 
+                         String(c.data?.schoolId || c.schoolId) === String(selectedSchoolDetail.id) && 
+                         !['U14', 'U15', 'U16', 'U17', 'U19'].includes(c.data?.team || c.data?.ageGroup)
+                      );
+                      const unassignedPlayers = players.filter(p => 
+                         String(p.data?.schoolId || p.schoolId) === String(selectedSchoolDetail.id) &&
+                         !['U14', 'U15', 'U16', 'U17', 'U19'].includes(p.data?.team || p.data?.ageGroup)
+                      );
+                      const schoolAdmins = admins.filter(a => String(a.data?.schoolId || a.schoolId) === String(selectedSchoolDetail.id));
+
+                      if (unassignedCoaches.length === 0 && unassignedPlayers.length === 0 && schoolAdmins.length === 0) return null;
+
+                      return (
+                        <div className="rounded-xl border bg-white overflow-hidden shadow-sm mt-6">
+                           <div className="bg-gray-50 px-6 py-3 border-b">
+                              <h3 className="font-bold text-gray-800">Other Staff & Unassigned</h3>
+                           </div>
+                           <div className="p-6 space-y-6">
+                              {schoolAdmins.length > 0 && (
+                                 <div>
+                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">School Admins</h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                       {schoolAdmins.map(admin => (
+                                          <div key={admin.id} className="flex items-center gap-3 p-3 rounded-lg border bg-blue-50 border-blue-100">
+                                             <div className="h-10 w-10 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold">
+                                                {(admin.data?.name?.[0] || '')}{(admin.data?.surname?.[0] || '')}
+                                             </div>
+                                             <div>
+                                                <div className="font-medium text-gray-900">{admin.data?.name} {admin.data?.surname}</div>
+                                                <div className="text-xs text-gray-500">{admin.data?.email || admin.email}</div>
+                                             </div>
+                                          </div>
+                                       ))}
+                                    </div>
+                                 </div>
+                              )}
+                              
+                              {(unassignedCoaches.length > 0 || unassignedPlayers.length > 0) && (
+                                 <div>
+                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Unassigned Staff/Players</h4>
+                                    <div className="text-sm text-gray-500">
+                                       {unassignedCoaches.length} Coaches, {unassignedPlayers.length} Players without specific age group assignment.
+                                    </div>
+                                 </div>
+                              )}
+                           </div>
+                        </div>
+                      )
+                   })()}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -476,30 +906,38 @@ export default function EPHSRUAdminDashboard({
                 { title: 'Coaches', data: coaches, icon: UserCheck, color: 'green' },
                 { title: 'Referees', data: referees, icon: Award, color: 'amber' },
                 { title: 'Admins', data: admins, icon: Shield, color: 'rose' }
-              ].map((category) => (
-                <div key={category.title} className="rounded-xl border bg-white p-4 shadow-sm">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className={`p-2 bg-${category.color}-100 rounded-lg`}>
-                      <category.icon className={`h-5 w-5 text-${category.color}-600`} />
-                    </div>
-                    <h3 className="font-semibold text-gray-900">{category.title}</h3>
-                    <span className="ml-auto text-2xl font-bold text-gray-900">{category.data.length}</span>
-                  </div>
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {category.data.slice(0, 5).map((item) => (
-                      <div key={item.id} className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg">
-                        <div className={`h-8 w-8 rounded-full bg-${category.color}-100 flex items-center justify-center text-${category.color}-600 text-xs font-bold`}>
-                          {(item.data?.name?.[0] || '')}{(item.data?.surname?.[0] || '')}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-gray-900 truncate">{item.data?.name} {item.data?.surname}</div>
-                          <div className="text-xs text-gray-500 truncate">{item.data?.email || item.email}</div>
-                        </div>
+              ].map((category) => {
+                const c = ACCENT[category.color] || ACCENT.gray
+                const q = searchQuery.trim().toLowerCase()
+                const visible = q
+                  ? category.data.filter((item: any) => `${item.data?.name || ''} ${item.data?.surname || ''} ${item.data?.email || item.email || ''}`.toLowerCase().includes(q))
+                  : category.data
+                return (
+                  <div key={category.title} className="rounded-xl border bg-white p-4 shadow-sm">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className={`p-2 ${c.tint} rounded-lg`}>
+                        <category.icon className={`h-5 w-5 ${c.icon}`} />
                       </div>
-                    ))}
+                      <h3 className="font-semibold text-gray-900">{category.title}</h3>
+                      <span className="ml-auto text-2xl font-bold text-gray-900">{visible.length}</span>
+                    </div>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {visible.slice(0, 25).map((item: any) => (
+                        <div key={item.id} className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg">
+                          <div className={`h-8 w-8 rounded-full ${c.tint} flex items-center justify-center ${c.text} text-xs font-bold`}>
+                            {(item.data?.name?.[0] || '')}{(item.data?.surname?.[0] || '')}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-gray-900 truncate">{item.data?.name} {item.data?.surname}</div>
+                            <div className="text-xs text-gray-500 truncate">{item.data?.email || item.email}</div>
+                          </div>
+                        </div>
+                      ))}
+                      {visible.length === 0 && <div className="p-2 text-sm text-gray-400 italic">No matches</div>}
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}
@@ -535,12 +973,20 @@ export default function EPHSRUAdminDashboard({
                     Cards
                   </button>
                 </div>
-                <button className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                <button disabled={pendingApprovals.length === 0 || !!decidingId} onClick={approveAll} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed">
                   <CheckCircle className="h-4 w-4" /> Approve All
                 </button>
               </div>
             </div>
-            <div className={`transition-opacity duration-150 ${resultsSwitching ? 'opacity-0' : 'opacity-100'}`}>
+            {approvalsLoading && <div className="text-sm text-gray-500">Loading approvals...</div>}
+            {!approvalsLoading && pendingApprovals.length === 0 && (
+              <div className="rounded-xl border-2 border-dashed bg-gray-50 py-16 text-center text-gray-500">
+                <CheckCircle className="h-12 w-12 text-green-400 mx-auto mb-3" />
+                <p className="font-medium">All caught up</p>
+                <p className="text-sm">There are no pending approval requests.</p>
+              </div>
+            )}
+            <div className={`transition-opacity duration-150 ${resultsSwitching ? 'opacity-0' : 'opacity-100'} ${pendingApprovals.length === 0 ? 'hidden' : ''}`}>
               {resultsView === 'list' ? (
                 <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
                   <table className="w-full text-sm">
@@ -571,8 +1017,8 @@ export default function EPHSRUAdminDashboard({
                             <td className="px-6 py-4 text-gray-600">{approval.submittedAt}</td>
                             <td className="px-6 py-4 text-right">
                               <div className="flex justify-end gap-2">
-                                <button className="p-1.5 text-green-600 hover:bg-green-50 rounded"><CheckCircle className="h-5 w-5" /></button>
-                                <button className="p-1.5 text-red-600 hover:bg-red-50 rounded"><XCircle className="h-5 w-5" /></button>
+                                <button aria-label="Approve" disabled={decidingId === approval.id} onClick={() => decideApproval(approval.id, 'approved')} className="p-1.5 text-green-600 hover:bg-green-50 rounded disabled:opacity-50"><CheckCircle className="h-5 w-5" /></button>
+                                <button aria-label="Reject" disabled={decidingId === approval.id} onClick={() => decideApproval(approval.id, 'rejected')} className="p-1.5 text-red-600 hover:bg-red-50 rounded disabled:opacity-50"><XCircle className="h-5 w-5" /></button>
                               </div>
                             </td>
                           </tr>
@@ -598,9 +1044,8 @@ export default function EPHSRUAdminDashboard({
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <button className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"><CheckCircle className="h-4 w-4" /> Approve</button>
-                            <button className="flex items-center gap-2 px-4 py-2 border rounded-lg hover:bg-gray-50"><XCircle className="h-4 w-4" /> Reject</button>
-                            <button className="p-2 hover:bg-gray-100 rounded-lg text-gray-400"><Eye className="h-4 w-4" /></button>
+                            <button disabled={decidingId === approval.id} onClick={() => decideApproval(approval.id, 'approved')} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"><CheckCircle className="h-4 w-4" /> Approve</button>
+                            <button disabled={decidingId === approval.id} onClick={() => decideApproval(approval.id, 'rejected')} className="flex items-center gap-2 px-4 py-2 border rounded-lg hover:bg-gray-50 disabled:opacity-50"><XCircle className="h-4 w-4" /> Reject</button>
                           </div>
                         </div>
                       </div>

@@ -1,3 +1,4 @@
+import { notifyError, notifySuccess } from '../../utils/notify'
 import { useEffect, useState } from 'react'
 import { ZoneSelect } from '../../components/Dropdowns'
 import { isEmail, isPhoneZA, isIdNumber } from '../../utils/validation'
@@ -29,9 +30,9 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     
-    if (email && !isEmail(email)) return alert('Invalid email')
-    if (phone && !isPhoneZA(phone)) return alert('Invalid phone number (+27 or 0XXXXXXXXX)')
-    if (idNumber && !isIdNumber(idNumber)) return alert('Invalid ID number')
+    if (email && !isEmail(email)) return notifyError('Invalid email')
+    if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
+    if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID number')
     const passwordHash = password ? bcrypt.hashSync(password, 10) : undefined
     const payload = { name, surname, idNumber, dob, phone, email, zoneId: zone, passwordHash }
     await login('Referee', zone)
@@ -39,7 +40,7 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
     if (!ok) addEntity('Referee', payload)
     addAudit({ id: crypto.randomUUID(), userRole: 'EPHSRUAdmin', entity: 'Referee', action: 'create', after: { name, surname, zone }, ts: Date.now() })
     clearDraft('referee')
-    alert('Referee registration submitted')
+    notifySuccess('Referee registration submitted')
   }
   return (
     <form className="space-y-3" onSubmit={submit}>

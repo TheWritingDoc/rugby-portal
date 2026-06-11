@@ -40,6 +40,7 @@ test.describe('Roles Hierarchy and UX Flows', () => {
     const badCoach = await apiPost(request, adminTokenScoped, 'admins', { name: 'X', surname: 'Y', email: 'x@test.local', role: 'SchoolAdmin', zoneId, schoolId })
     expect(badCoach.status()).toBe(403)
 
+    // Login as SchoolAdmin and verify dashboard
     await page.goto('http://localhost:5173/')
     await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
     const loginForm = page.locator('form:has(button:has-text("Sign In"))')
@@ -48,15 +49,11 @@ test.describe('Roles Hierarchy and UX Flows', () => {
     await loginForm.getByRole('button', { name: 'Sign In' }).click()
     await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
     await page.waitForLoadState('networkidle')
-    await page.evaluate(() => { try { localStorage.setItem('auth:role', 'Coach'); localStorage.setItem('nav:target', 'dashboard') } catch {} })
-    const viewSelect = page.getByLabel('View')
-    await expect(viewSelect).toBeVisible()
-    await viewSelect.selectOption('coaches')
-    await expect(page.locator('div.text-base.font-semibold').filter({ hasText: 'Coaches' }).first()).toBeVisible()
-    await viewSelect.selectOption('teams')
-    await expect(page.getByText('Players by Team')).toBeVisible()
-    await expect(page.locator('div.mb-1.text-sm.font-semibold').filter({ hasText: 'U16' }).first()).toBeVisible()
+    // Verify SchoolAdmin dashboard tabs
+    await expect(page.getByRole('button', { name: /Teams & Players/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Coaches/i })).toBeVisible()
 
+    // Login as Coach and verify player management
     await page.goto('http://localhost:5173/')
     await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
     const coachLogin = page.locator('form:has(button:has-text("Sign In"))')
@@ -71,10 +68,20 @@ test.describe('Roles Hierarchy and UX Flows', () => {
       setTimeout(() => resolve(), 2000)
     }))
     await page.waitForLoadState('networkidle')
-    const firstCard = page.locator('div.rounded-md.border').first()
-    await expect(page.locator('[data-player-id]')).toHaveCount(1, { timeout: 30000 })
-    await expect(firstCard).toBeVisible({ timeout: 15000 })
-    await firstCard.getByRole('button', { name: 'Edit' }).click()
+    // Verify Coach dashboard tabs
+    await expect(page.getByRole('button', { name: /Players/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Pending/i })).toBeVisible()
+    // Switch from folder browser to search view to find players
+    await page.getByRole('button', { name: 'Search' }).click()
+    await page.waitForTimeout(600)
+    // Click first player card
+    await page.locator('button[data-player-name]').first().click()
+    await page.waitForTimeout(400)
+    // Open Actions dropdown and click Edit Profile
+    await page.getByRole('button', { name: 'Actions' }).click()
+    await page.getByRole('button', { name: 'Edit Profile' }).click()
+    await page.waitForTimeout(400)
+    // Edit name field
     const editor = page.locator('fieldset').filter({ hasText: 'Personal Information' }).first()
     const nameField = editor.locator('[data-field-key="name"] input')
     const newName = `P-${ts}`

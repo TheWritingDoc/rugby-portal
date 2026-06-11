@@ -15,7 +15,7 @@
     "test:screenshots": "npx tsx tests/run-optimization.ts",
     "test:report": "npx allure generate test-results/allure-results -o test-results/allure-report --clean && npx allure open test-results/allure-report",
     "server": "node server/index-sqlite.js",
-    "server:prod": "NODE_ENV=production node server/index-prod.js",
+    "server:prod": "NODE_ENV=production node server/index-sqlite.js",
     "deploy": "npm run build && npm run test:e2e && npm run server:prod"
   },
   "dependencies": {

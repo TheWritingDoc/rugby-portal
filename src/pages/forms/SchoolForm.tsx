@@ -1,3 +1,4 @@
+import { notifyError, notifySuccess } from '../../utils/notify'
 import { useEffect, useState } from 'react'
 import { ZoneSelect, SchoolSelect, AutoFields } from '../../components/Dropdowns'
 import { isEmail, isPhoneZA } from '../../utils/validation'
@@ -6,6 +7,8 @@ import { addEntity } from '../../utils/db'
 import { safePost } from '../../utils/api'
 import { loadDraft, saveDraft, clearDraft } from '../../utils/storage'
 import { login } from '../../utils/auth'
+import { API_ORIGIN, apiUrl } from '../../utils/apiBase'
+import { resizeImage } from '../../utils/image'
 import bcrypt from 'bcryptjs'
 
 export default function SchoolForm({ role }: { role?: 'Player' | 'Referee' | 'Coach' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin' }) {
@@ -15,6 +18,7 @@ export default function SchoolForm({ role }: { role?: 'Player' | 'Referee' | 'Co
   const [contactNumber, setContactNumber] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [logoUrl, setLogoUrl] = useState('')
   const [submitted, setSubmitted] = useState(false)
   useEffect(() => {
     const d = loadDraft<any>('school')
@@ -32,10 +36,10 @@ export default function SchoolForm({ role }: { role?: 'Player' | 'Referee' | 'Co
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     
-    if (email && !isEmail(email)) return alert('Invalid email')
-    if (contactNumber && !isPhoneZA(contactNumber)) return alert('Invalid phone number (+27 or 0XXXXXXXXX)')
+    if (email && !isEmail(email)) return notifyError('Invalid email')
+    if (contactNumber && !isPhoneZA(contactNumber)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
     const passwordHash = password ? bcrypt.hashSync(password, 10) : undefined
-    const payload = { zoneId: zone, schoolId: school, address, contactNumber, email, passwordHash }
+    const payload = { zoneId: zone, schoolId: school, address, contactNumber, email, passwordHash, logoUrl }
     await login('SchoolAdmin', zone, school)
     const ok = await safePost('schools', payload)
     if (!ok) addEntity('School', payload)
@@ -74,6 +78,42 @@ export default function SchoolForm({ role }: { role?: 'Player' | 'Referee' | 'Co
         <label className="block">
           <span className="text-sm font-medium">School Email Address</span>
           <input type="email" className="mt-1 w-full rounded-md border p-2" value={email} onChange={(e) => setEmail(e.target.value)} />
+        </label>
+        <label className="block">
+          <span className="text-sm font-medium">School Emblem / Logo</span>
+          <input
+            type="file"
+            accept="image/*"
+            className="mt-1 w-full rounded-md border p-2"
+            onChange={async (e) => {
+              const raw = e.target.files?.[0]
+              if (!raw) return
+              const file = await resizeImage(raw, 256)
+              const fd = new FormData()
+              fd.append('file', file)
+              try {
+                if (!localStorage.getItem('auth:token')) await login('SchoolAdmin', zone, school)
+                const t = localStorage.getItem('auth:token') || ''
+                const res = await fetch(apiUrl('/upload'), { method: 'POST', headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: fd })
+                if (res.ok) {
+                  const data = await res.json()
+                  setLogoUrl(String(data.url || ''))
+                } else {
+                  notifyError('Emblem upload failed. Please try again.')
+                }
+              } catch {
+                notifyError('Emblem upload failed. Please try again.')
+              }
+            }}
+          />
+          {logoUrl && (
+            <img
+              src={logoUrl.startsWith('/uploads') ? `${API_ORIGIN}${logoUrl}` : logoUrl}
+              alt="School emblem"
+              className="mt-2 h-16 w-16 rounded-md object-contain ring-1 ring-gray-300"
+              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+            />
+          )}
         </label>
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

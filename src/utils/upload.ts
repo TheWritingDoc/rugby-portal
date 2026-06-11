@@ -4,7 +4,8 @@ export async function uploadFile(file: File): Promise<string | null> {
   try {
     const fd = new FormData()
     fd.append('file', file)
-    const res = await fetch(apiUrl('/upload'), { method: 'POST', body: fd })
+    const t = localStorage.getItem('auth:token') || ''
+    const res = await fetch(apiUrl('/upload'), { method: 'POST', headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: fd })
     if (res.ok) {
       const data = await res.json()
       return data.url as string

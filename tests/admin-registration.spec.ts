@@ -24,11 +24,8 @@ test('Admin registration via UI and login to dashboard', async ({ page }) => {
   await page.getByRole('textbox', { name: 'Mobile Number', exact: true }).fill('0821234567')
   await page.getByRole('textbox', { name: 'Email Address', exact: true }).first().fill(email)
 
-  const dialogPromise = page.waitForEvent('dialog')
   await page.getByRole('button', { name: 'Submit Admin Registration' }).click()
-  const dialog = await dialogPromise
-  expect(dialog.message()).toMatch(/Admin registration submitted/i)
-  await dialog.accept()
+  await expect(page.getByTestId('toast-success')).toContainText(/Admin registration submitted/i)
 
   await page.goto('http://localhost:5173/')
   const loginForm = page.locator('form:has(button:has-text("Sign In"))')

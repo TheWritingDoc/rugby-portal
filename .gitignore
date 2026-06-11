@@ -8,3 +8,10 @@ server/uploads/
 *.log
 *.tmp
 .DS_Store
+playwright-report*/
+allure-results/
+playwright-report-roles/
+server/data/*.sqlite*
+test-results/
+.env.sh
+uploads/

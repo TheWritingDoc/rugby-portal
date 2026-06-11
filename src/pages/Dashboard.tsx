@@ -1,25 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ZoneSelect, SchoolSelect } from '../components/Dropdowns'
 import { getEntities, updateEntity, getProposals, addProposal, setProposalStatus, deleteProposal } from '../utils/db'
-import { fetchList, safePost, safePut, postJson, putJson, fetchOne, postJsonPath } from '../utils/api'
+import { fetchList, safePost, safePut, postJson, putJson, fetchOne, postJsonPath, getJsonPath } from '../utils/api'
 import { emitPlayersLoaded, emitPlayersUpdated, emitListReady, emitRowAdded } from '../utils/events'
 import { normalizeRow } from '../utils/normalize'
 import { AGE_GROUPS, POSITIONS, RELATIONSHIPS } from '../utils/constants'
-import { login, getToken } from '../utils/auth'
+import { ensureSession, getToken } from '../utils/auth'
 import { API_ORIGIN, apiUrl } from '../utils/apiBase'
-import { LayoutGrid, List as ListIcon, Users, User, Heart, Shield, Activity, FileText, ChevronDown, MoreVertical, School, Mail, Phone, MapPin, Calendar, CreditCard, AlertCircle, X, UserCheck, Crown } from 'lucide-react'
+import { LayoutGrid, List as ListIcon, Users, User, Heart, Shield, Activity, FileText, ChevronDown, MoreVertical, School, Mail, Phone, MapPin, Calendar, CreditCard, AlertCircle, X, UserCheck, Crown, Search } from 'lucide-react'
 import { isEmail, isPhoneZA, isIdNumber } from '../utils/validation'
 import SearchBar from '../components/SearchBar'
 import { trackUserAction, trackPerformance, trackError, measurePerformance, trackApiCall } from '../utils/metrics'
-import MetricsDashboard from '../components/MetricsDashboard'
+import { notifySuccess, notifyError, notifyWarning, notifyInfo } from '../utils/notify'
 import PlayerHistoryPanel from '../components/PlayerHistoryPanel'
 import PlayerApprovalsPanel from '../components/PlayerApprovalsPanel'
 import PlayerMigrationPanel from '../components/PlayerMigrationPanel'
 import PlayerCard from '../components/PlayerCard'
 import SchoolCard from '../components/SchoolCard'
 import RefereeCard from '../components/RefereeCard'
+import { coachPhotoUrl } from '../components/CoachCard'
+import ExportMenu from '../components/ExportMenu'
 import SchoolAdminDashboard from '../components/dashboards/SchoolAdminDashboard'
 import ZoneCoordinatorDashboard from '../components/dashboards/ZoneCoordinatorDashboard'
+import EPHSRUAdminDashboard from '../components/dashboards/EPHSRUAdminDashboard'
+import SeasonFilter from '../components/SeasonFilter'
+import { currentSeasonYear, filterBySeason, seasonsPresent, archivedCount, seasonYearOf } from '../utils/season'
+import { schoolNameOf, zoneNameOf } from '../utils/labels'
+import { resizeImage } from '../utils/image'
+import { zones as STATIC_ZONES } from '../data/zones'
 
 type Role = 'Player' | 'Referee' | 'Coach' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin'
 
@@ -35,27 +43,28 @@ export default function Dashboard({ role }: { role: Role }) {
   const [referees, setReferees] = useState<any[]>([])
   const [schoolsList, setSchoolsList] = useState<any[]>([])
   const [admins, setAdmins] = useState<any[]>([])
-  const [teamSel, setTeamSel] = useState<string>('')
-  const [viewSel, setViewSel] = useState<'teams' | 'coaches' | 'referees' | 'admins'>('teams')
-  const [selectedPlayer, setSelectedPlayer] = useState<any | null>(null)
-  const [selectedCoach, setSelectedCoach] = useState<any | null>(null)
   const filteredPlayers = useMemo(() => filterBy(role, players, zone, school), [role, players, zone, school])
+  // Admin dashboards default to the current season; older registrations stay reachable via the archive selector
+  const [seasonYear, setSeasonYear] = useState<number | null>(currentSeasonYear())
+  const seasonPlayers = useMemo(() => filterBySeason(filteredPlayers, seasonYear), [filteredPlayers, seasonYear])
+  const playerSeasons = useMemo(() => seasonsPresent(filteredPlayers), [filteredPlayers])
+  const archivedPlayers = useMemo(() => archivedCount(filteredPlayers, currentSeasonYear()), [filteredPlayers])
+  // Coaches follow the same season selection: past-season coaches are archived, not deleted
+  const seasonCoaches = useMemo(() => filterBySeason(filterBy(role, coaches, zone, school), seasonYear), [role, coaches, zone, school, seasonYear])
   const filteredCoaches = useMemo(() => filterBy(role, coaches, zone, school), [role, coaches, zone, school])
   const filteredReferees = useMemo(() => filterBy(role, referees, zone, school), [role, referees, zone, school])
   const filteredSchools = useMemo(() => filterBy(role, schoolsList, zone, school), [role, schoolsList, zone, school])
   const filteredAdmins = useMemo(() => filterBy(role, admins, zone, school), [role, admins, zone, school])
-  const teams = useMemo(() => {
-    const t1 = filteredCoaches.map((c) => String((c.data?.team || '') || ''))
-    const t2 = filteredPlayers.map((p) => String((p.data?.team || p.data?.ageGroup || '') || ''))
-    const set = new Set<string>([...t1, ...t2].filter((x) => !!x))
-    return Array.from(set)
-  }, [filteredCoaches, filteredPlayers])
-  const teamOptions = useMemo(() => {
-    const base = ['U15', 'U16', 'U17', 'U19']
-    const set = new Set<string>([...base, ...teams, 'Unassigned'])
-    return Array.from(set)
-  }, [teams])
-  useEffect(() => { if (viewSel !== 'teams') setTeamSel('') }, [viewSel])
+  // Union of the fixed EP zones and any zone ids present in live data (e.g. test data)
+  const zonesList = useMemo(() => {
+    const names = new Map(STATIC_ZONES.map((z) => [String(z.id), z.name]))
+    const ids = new Set<string>(STATIC_ZONES.map((z) => String(z.id)))
+    for (const x of [...schoolsList, ...admins, ...coaches, ...players, ...referees]) {
+      const z = String(x?.data?.zoneId ?? x?.zoneId ?? '')
+      if (z) ids.add(z)
+    }
+    return Array.from(ids).map((id) => ({ id, name: names.get(id) || `Zone ${id}`, data: { name: names.get(id) || `Zone ${id}` } }))
+  }, [schoolsList, admins, coaches, players, referees])
   useEffect(() => {
     const z = localStorage.getItem('auth:zoneId') || undefined
     const s = localStorage.getItem('auth:schoolId') || undefined
@@ -89,9 +98,9 @@ export default function Dashboard({ role }: { role: Role }) {
     return () => { window.removeEventListener('app:list:insert', onInsert as any) }
   }, [])
   useEffect(() => {
-    if (role) {
-      const email = localStorage.getItem('auth:email') || undefined
-      login(role, zone, school, email)
+    // Restore a session token if none exists (e.g. page reload); never re-issues with a different role
+    if (role && !getToken()) {
+      ensureSession()
     }
   }, [role, zone, school])
   async function load() {
@@ -148,7 +157,9 @@ export default function Dashboard({ role }: { role: Role }) {
   }
   return (
     <section>
-      <h1 className="mb-3 text-xl font-bold">{schoolNameTop || '—'}</h1>
+      {(role === 'Coach' || role === 'SchoolAdmin' || role === 'Player') && schoolNameTop && (
+        <h1 className="mb-3 text-xl font-bold">{schoolNameTop}</h1>
+      )}
       {role === 'Player' ? (
         <PlayerView players={players} />
       ) : role === 'Coach' ? (
@@ -160,407 +171,46 @@ export default function Dashboard({ role }: { role: Role }) {
       ) : role === 'Referee' ? (
         <RefereeDashboard referees={filteredReferees} />
       ) : role === 'EPHSRUAdmin' ? (
-        <EPHSRUAdminDashboard schools={filteredSchools} admins={filteredAdmins} referees={referees} />
-      ) : role === 'ZoneCoordinator' ? (
-        <ZoneCoordinatorDashboard 
-          zone={zone}
-          schools={filteredSchools}
-          players={filteredPlayers}
-          coaches={filteredCoaches}
-          referees={filteredReferees}
-          onRefresh={load}
-        />
-      ) : role === 'SchoolAdmin' ? (
-        <SchoolAdminDashboard 
-          zone={zone} 
-          school={school} 
-          schoolNameTop={schoolNameTop} 
-          players={filteredPlayers} 
-          coaches={filteredCoaches} 
-          referees={filteredReferees} 
-          admins={filteredAdmins} 
-          onRefresh={load} 
-        />
-      ) : (
         <>
-          <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {role === 'SchoolAdmin' ? (
-              <>
-                <div className="rounded-md border bg-white p-2">
-                  <div className="text-xs text-gray-600">Zone</div>
-                  <div className="text-sm font-semibold">{zone || '—'}</div>
-                </div>
-                <div className="rounded-md border bg-white p-2">
-                  <div className="text-xs text-gray-600">School</div>
-                  <div className="text-sm font-semibold">{school || '—'}</div>
-                </div>
-                <div className="rounded-md border border-brand/30 bg-brand/5 p-2 sm:col-span-2 ring-1 ring-brand/20">
-                  <label className="block">
-                    <span className="text-sm font-medium text-brand">View</span>
-                    <select className="mt-1 w-full rounded-md border p-2" value={viewSel} onChange={(e) => setViewSel(e.target.value as any)}>
-                      <option value="teams">Teams</option>
-                      <option value="coaches">Coaches</option>
-                      <option value="referees">Referees</option>
-                      <option value="admins">Admins</option>
-                    </select>
-                  </label>
-                </div>
-                {viewSel === 'teams' && (
-                  <div className="rounded-md border border-brand/30 bg-brand/5 p-2 sm:col-span-2 ring-1 ring-brand/20">
-                    <label className="block">
-                      <span className="text-sm font-medium text-brand">Team</span>
-                      <select className="mt-1 w-full rounded-md border p-2" value={teamSel} onChange={(e) => setTeamSel(e.target.value)}>
-                        <option value="">All teams</option>
-                        {teamOptions.map((t) => (<option key={t} value={t}>{t}</option>))}
-                      </select>
-                    </label>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <ZoneSelect value={zone} onChange={setZone} />
-                <SchoolSelect zoneId={zone} value={school} onChange={setSchool} />
-              </>
-            )}
-          </div>
-          <div className={role === 'SchoolAdmin' && (viewSel === 'coaches' || viewSel === 'admins') ? 'grid grid-cols-1 gap-3 sm:grid-cols-1' : 'grid grid-cols-1 gap-3 sm:grid-cols-2'}>
-            {role !== 'SchoolAdmin' && (<Card title="Schools" items={filteredSchools} fields={['schoolId','zoneId','address']} />)}
-            {role === 'SchoolAdmin' ? (
-              viewSel === 'teams' ? (
-                <TeamPlayers players={filteredPlayers} teamSel={teamSel} onSelect={(p) => setSelectedPlayer(p)} />
-              ) : viewSel === 'coaches' ? (
-                <ManageCoaches zone={zone} school={school} onSelect={(c) => setSelectedCoach(c)} onUpdated={async () => {
-                  const filters: any = { zoneId: zone, schoolId: school }
-                  const c = await fetchList('coaches', filters)
-                  if (c.length) setCoaches(c)
-                }} />
-              ) : viewSel === 'admins' ? (
-                <ManageMyAdmin zone={zone} school={school} onUpdated={async () => {
-                  const a = await fetchList('admins', { zoneId: zone, schoolId: school })
-                  if (a.length) setAdmins(a)
-                }} />
-              ) : (
-                <Card title="Referees" items={filteredReferees} fields={['name','surname','zoneId']} />
-              )
-            ) : role === 'EPHSRUAdmin' && viewSel === 'admins' ? (
-              <ManageAllAdmins onUpdated={async () => {
-                const a = await fetchList('admins')
-                if (a.length) setAdmins(a)
-              }} />
-            ) : (
-              <Card title="Players" items={filteredPlayers} fields={['name','surname','schoolId','zoneId','ageGroup']} />
-            )}
-            {role !== 'SchoolAdmin' && (
-              <Card title="Coaches" items={filteredCoaches} fields={['name','surname','schoolId','zoneId']} />
-            )}
-            {role !== 'SchoolAdmin' && (
-              <Card title="Referees" items={filteredReferees} fields={['name','surname','zoneId']} />
-            )}
-            <Card title="Admins" items={filteredAdmins} fields={['name','surname','schoolId','zoneId']} />
-          </div>
-          {selectedPlayer && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setSelectedPlayer(null)}>
-              <div className="max-w-lg w-[90%] rounded-lg border bg-white p-4 shadow" onClick={(e) => e.stopPropagation()}>
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    {(() => {
-                      const raw = String(selectedPlayer.data?.photoUrl || '')
-                      const src = raw.startsWith('/uploads') ? `${API_ORIGIN}${raw}` : raw
-                      const initials = (((selectedPlayer.data?.name || '').charAt(0) + (selectedPlayer.data?.surname || '').charAt(0)).toUpperCase() || 'P')
-                      return src ? (
-                        <img src={src} alt="Profile" className="h-14 w-14 rounded-full object-cover" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
-                      ) : (
-                        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-brand/10 text-brand ring-1 ring-brand/30">{initials}</div>
-                      )
-                    })()}
-                    <div className="text-lg font-semibold">{selectedPlayer.data?.name} {selectedPlayer.data?.surname}</div>
-                  </div>
-                  <button className="rounded-md border px-2 py-1" onClick={() => setSelectedPlayer(null)}>Close</button>
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <div className="text-sm"><span className="mr-2 font-semibold">Team</span><span>{selectedPlayer.data?.team || selectedPlayer.data?.ageGroup || '—'}</span></div>
-                  <div className="text-sm"><span className="mr-2 font-semibold">School</span><span>{selectedPlayer.data?.schoolId || '—'}</span></div>
-                  <div className="text-sm"><span className="mr-2 font-semibold">Zone</span><span>{selectedPlayer.data?.zoneId || '—'}</span></div>
-                  <div className="text-sm"><span className="mr-2 font-semibold">Position</span><span>{selectedPlayer.data?.position || '—'}</span></div>
-                  <div className="text-sm"><span className="mr-2 font-semibold">ID/Passport</span><span>{selectedPlayer.data?.idNumber || '—'}</span></div>
-                  <div className="text-sm"><span className="mr-2 font-semibold">Mobile</span><span>{selectedPlayer.data?.phone || '—'}</span></div>
-                  <div className="text-sm"><span className="mr-2 font-semibold">Email</span><span>{selectedPlayer.data?.email || '—'}</span></div>
-                  <div className="text-sm sm:col-span-2"><span className="mr-2 font-semibold">Address</span><span>{selectedPlayer.data?.address || '—'}</span></div>
-                </div>
-              </div>
-            </div>
-          )}
-          {selectedCoach && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setSelectedCoach(null)}>
-              <div className="max-w-lg w-[90%] rounded-lg border bg-white p-4 shadow" onClick={(e) => e.stopPropagation()}>
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-base font-semibold">{(selectedCoach.data?.name || '')} {(selectedCoach.data?.surname || '')}</div>
-                  <button className="rounded-md border px-2 py-1" onClick={() => setSelectedCoach(null)}>Close</button>
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <div className="text-sm"><span className="mr-2 font-semibold">Email</span><span>{selectedCoach.data?.email || selectedCoach.email || '—'}</span></div>
-                  <div className="text-sm"><span className="mr-2 font-semibold">Mobile</span><span>{selectedCoach.data?.contactNumber || '—'}</span></div>
-                  <div className="text-sm"><span className="mr-2 font-semibold">ID/Passport</span><span>{selectedCoach.data?.idNumber || '—'}</span></div>
-                  <div className="text-sm"><span className="mr-2 font-semibold">Team</span><span>{selectedCoach.data?.team || '—'}</span></div>
-                  <div className="text-sm sm:col-span-2"><span className="mr-2 font-semibold">Qualifications</span><span>{selectedCoach.data?.qualifications || '—'}</span></div>
-                  <div className="text-sm sm:col-span-2"><span className="mr-2 font-semibold">Experience</span><span>{selectedCoach.data?.experience || '—'}</span></div>
-                </div>
-              </div>
-            </div>
-          )}
+          <SeasonFilter seasons={playerSeasons} value={seasonYear} onChange={setSeasonYear} archivedCount={archivedPlayers} />
+          <EPHSRUAdminDashboard
+            zones={zonesList}
+            schools={filteredSchools}
+            players={seasonPlayers}
+            coaches={seasonCoaches}
+            referees={referees}
+            admins={filteredAdmins}
+            onRefresh={load}
+          />
         </>
-      )}
+      ) : role === 'ZoneCoordinator' ? (
+        <>
+          <SeasonFilter seasons={playerSeasons} value={seasonYear} onChange={setSeasonYear} archivedCount={archivedPlayers} />
+          <ZoneCoordinatorDashboard
+            zone={zone}
+            schools={filteredSchools}
+            players={seasonPlayers}
+            coaches={seasonCoaches}
+            referees={filteredReferees}
+            onRefresh={load}
+          />
+        </>
+      ) : role === 'SchoolAdmin' ? (
+        <>
+          <SeasonFilter seasons={playerSeasons} value={seasonYear} onChange={setSeasonYear} archivedCount={archivedPlayers} />
+          <SchoolAdminDashboard
+            zone={zone}
+            school={school}
+            schoolNameTop={schoolNameTop}
+            players={seasonPlayers}
+            coaches={seasonCoaches}
+            referees={filteredReferees}
+            admins={filteredAdmins}
+            onRefresh={load}
+          />
+        </>
+      ) : null}
     </section>
-  )
-}
-
-function Card({ title, items, fields }: { title: string; items: any[]; fields: string[] }) {
-  return (
-    <div className="rounded-lg border bg-white p-3 shadow w-full col-span-1 sm:col-span-2">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-base font-semibold">{title}</div>
-        <div className="text-sm text-gray-600">{items.length}</div>
-      </div>
-      <div className="divide-y">
-        {items.slice(0, 20).map((it) => (
-          <div key={it.id} className="py-2 text-sm">
-            {fields.map((f) => (
-              <span key={f} className="mr-2">{it.data[f]}</span>
-            ))}
-          </div>
-        ))}
-        {items.length === 0 && <div className="py-2 text-sm text-gray-500">No records</div>}
-      </div>
-    </div>
-  )
-}
-
-function TeamPlayers({ players, teamSel, onSelect }: { players: any[]; teamSel: string; onSelect: (p: any) => void }) {
-  const [viewMode, setViewMode] = useState<'cards' | 'list'>(() => {
-    try {
-      return localStorage.getItem(SCHOOLADMIN_TEAMS_VIEW_KEY) === 'list' ? 'list' : 'cards'
-    } catch {
-      return 'cards'
-    }
-  })
-  const [switching, setSwitching] = useState(false)
-  useEffect(() => {
-    try { localStorage.setItem(SCHOOLADMIN_TEAMS_VIEW_KEY, viewMode) } catch {}
-  }, [viewMode])
-  const teams = useMemo(() => {
-    const set = new Set<string>(players.map((p) => String(p.data?.team || p.data?.ageGroup || '')).filter((x) => !!x))
-    return Array.from(set)
-  }, [players])
-  const unassigned = players.filter((p) => !String(p.data?.team || p.data?.ageGroup || ''))
-  const teamsToShow = teamSel ? teams.filter((t) => t === teamSel) : teams
-  const showUnassigned = teamSel === '' || teamSel === 'Unassigned'
-
-  const listRows = useMemo(() => {
-    const list = players.filter((p) => {
-      const t = String(p.data?.team || p.data?.ageGroup || '')
-      const isUnassigned = !t
-      if (teamSel === 'Unassigned') return isUnassigned
-      if (teamSel) return t === teamSel
-      return true
-    })
-    const sorted = [...list].sort((a, b) => {
-      const at = String(a.data?.team || a.data?.ageGroup || '')
-      const bt = String(b.data?.team || b.data?.ageGroup || '')
-      if (at !== bt) return at.localeCompare(bt)
-      const an = String(a.data?.surname || '').localeCompare(String(b.data?.surname || ''))
-      if (an !== 0) return an
-      return String(a.data?.name || '').localeCompare(String(b.data?.name || ''))
-    })
-    return sorted
-  }, [players, teamSel])
-
-  return (
-    <div className="rounded-lg border bg-white p-3 shadow sm:col-span-2">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-3">
-          <div className="text-base font-semibold">Players by Team</div>
-          <div className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700 ring-1 ring-gray-300">Teams: {teamsToShow.length + (showUnassigned ? 1 : 0)}</div>
-          <div className="inline-flex items-center rounded-full bg-brand/10 px-3 py-1 text-sm font-semibold text-brand ring-1 ring-brand/30">Total: {players.length}</div>
-        </div>
-        <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Player view">
-          <button type="button" aria-label="List view" aria-pressed={viewMode === 'list'} className={`inline-flex items-center gap-1 px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 ${viewMode === 'list' ? 'bg-brand text-white' : ''}`} onClick={() => {
-            if (viewMode === 'list') return
-            setSwitching(true)
-            setTimeout(() => { setViewMode('list'); setSwitching(false) }, 120)
-          }}>
-            <ListIcon size={16} aria-hidden="true" />
-            List
-          </button>
-          <button type="button" aria-label="Card view" aria-pressed={viewMode === 'cards'} className={`inline-flex items-center gap-1 px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 ${viewMode === 'cards' ? 'bg-brand text-white' : ''}`} onClick={() => {
-            if (viewMode === 'cards') return
-            setSwitching(true)
-            setTimeout(() => { setViewMode('cards'); setSwitching(false) }, 120)
-          }}>
-            <LayoutGrid size={16} aria-hidden="true" />
-            Cards
-          </button>
-        </div>
-      </div>
-      <div className={`transition-opacity duration-150 ${switching ? 'opacity-0' : 'opacity-100'}`}>
-      {viewMode === 'list' ? (
-        <div className="overflow-x-auto rounded-md border">
-          <table className="w-full border-separate border-spacing-0 text-sm">
-            <thead>
-              <tr className="bg-gray-50">
-                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Team</th>
-                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Name</th>
-                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold">Surname</th>
-                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold hidden sm:table-cell">Age Group</th>
-                <th className="sticky top-0 border-b px-3 py-2 text-left font-semibold hidden md:table-cell">Gender</th>
-              </tr>
-            </thead>
-            <tbody>
-              {listRows.map((p) => {
-                const d = p.data || {}
-                const team = String(d.team || d.ageGroup || '') || 'Unassigned'
-                return (
-                  <tr key={p.id} className="cursor-pointer hover:bg-gray-50" onClick={() => onSelect(p)}>
-                    <td className="border-b px-3 py-2">{team}</td>
-                    <td className="border-b px-3 py-2">{d.name}</td>
-                    <td className="border-b px-3 py-2">{d.surname}</td>
-                    <td className="border-b px-3 py-2 hidden sm:table-cell">{d.ageGroup || team}</td>
-                    <td className="border-b px-3 py-2 hidden md:table-cell">{d.gender || '—'}</td>
-                  </tr>
-                )
-              })}
-              {listRows.length === 0 && (
-                <tr>
-                  <td className="px-3 py-3 text-gray-500" colSpan={5}>No players</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-          {teamsToShow.map((t) => (
-            <div key={t} className="rounded-md border p-2">
-              <div className="mb-1 text-sm font-semibold">{t}</div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-                {players.filter((p) => String(p.data?.team || p.data?.ageGroup || '') === t).map((it) => (
-                  <PlayerCard key={it.id} player={it} badge={String(it.data?.ageGroup || it.data?.team || '—')} onClick={() => onSelect(it)} />
-                ))}
-                {players.filter((p) => String(p.data?.team || p.data?.ageGroup || '') === t).length === 0 && <div className="py-2 text-sm text-gray-500">No players</div>}
-              </div>
-            </div>
-          ))}
-          {showUnassigned && (
-            <div className="rounded-md border p-2">
-              <div className="mb-1 text-sm font-semibold">Unassigned</div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-                {unassigned.map((it) => (
-                  <PlayerCard key={it.id} player={it} badge={String(it.data?.ageGroup || it.data?.team || '—')} onClick={() => onSelect(it)} />
-                ))}
-                {unassigned.length === 0 && <div className="py-2 text-sm text-gray-500">No unassigned players</div>}
-              </div>
-            </div>
-          )}
-          {teamsToShow.length === 0 && !unassigned.length && <div className="py-2 text-sm text-gray-500">No teams</div>}
-        </div>
-      )}
-      </div>
-    </div>
-  )
-}
-
-function ManageCoaches({ zone, school, onSelect, onUpdated }: { zone?: string; school?: string; onSelect?: (c: any) => void; onUpdated: () => void }) {
-  const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState({ name: '', surname: '', idNumber: '', phone: '', email: '', team: '' })
-  const [list, setList] = useState<any[]>([])
-  useEffect(() => { load() }, [zone, school])
-  async function load() {
-    const filters: any = { zoneId: zone, schoolId: school }
-    const c = await fetchList('coaches', filters)
-    setList(c)
-  }
-  async function addCoach() {
-    if (!school) return
-    const payload: any = {
-      name: form.name,
-      surname: form.surname,
-      idNumber: form.idNumber,
-      contactNumber: form.phone,
-      email: form.email,
-      schoolId: school,
-      zoneId: zone || '',
-      team: form.team,
-    }
-    await login('SchoolAdmin', zone, school)
-    const res = await postJson('coaches', payload)
-    if (res) {
-      setForm({ name: '', surname: '', idNumber: '', phone: '', email: '', team: '' })
-      setAdding(false)
-      await load(); await onUpdated()
-    }
-  }
-  async function updateTeam(c: any, team: string) {
-    const id = c.id || ''
-    const rowZone = (c.zoneId ?? c.data?.zoneId ?? zone ?? '') as string
-    const rowSchool = (c.schoolId ?? c.data?.schoolId ?? school ?? '') as string
-    await login('SchoolAdmin', rowZone, rowSchool)
-    const ok = await safePut('coaches', id, { team, schoolId: rowSchool, zoneId: rowZone })
-    if (ok) { await load(); await onUpdated() }
-  }
-  return (
-    <div className="rounded-lg border bg-white p-3 shadow">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="text-base font-semibold">Coaches</div>
-          <div className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700 ring-1 ring-gray-300">{list.length}</div>
-        </div>
-        <button className="rounded-md bg-brand px-3 py-2 text-white" onClick={() => setAdding((v) => !v)}>{adding ? 'Cancel' : 'Add Coach'}</button>
-      </div>
-      {adding && (
-        <div className="mb-3 rounded-md border p-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="block"><span className="text-sm font-medium">Name</span><input className="mt-1 w-full rounded-md border p-2" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-            <label className="block"><span className="text-sm font-medium">Surname</span><input className="mt-1 w-full rounded-md border p-2" value={form.surname} onChange={(e) => setForm({ ...form, surname: e.target.value })} /></label>
-            <label className="block"><span className="text-sm font-medium">ID/Passport</span><input className="mt-1 w-full rounded-md border p-2" value={form.idNumber} onChange={(e) => setForm({ ...form, idNumber: e.target.value })} /></label>
-            <label className="block"><span className="text-sm font-medium">Mobile</span><input className="mt-1 w-full rounded-md border p-2" placeholder="+27" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
-            <label className="block sm:col-span-2"><span className="text-sm font-medium">Email</span><input type="email" className="mt-1 w-full rounded-md border p-2" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
-            <label className="block sm:col-span-2"><span className="text-sm font-medium">Team</span>
-              <select className="mt-1 w-full rounded-md border p-2" value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}>
-                <option value="">Select...</option>
-                {['U15', 'U16', 'U17', 'U19'].map((t) => (<option key={t} value={t}>{t}</option>))}
-              </select>
-            </label>
-          </div>
-          <div className="mt-3 text-right"><button className="rounded-md bg-brand px-3 py-2 text-white" onClick={addCoach}>Save Coach</button></div>
-        </div>
-      )}
-      <div className="rounded-md border">
-        <div className="divide-y">
-          {list.map((c) => {
-            const d = c.data || {}
-            const initials = (((d.name || '').charAt(0) + (d.surname || '').charAt(0)).toUpperCase() || 'C')
-            return (
-              <div key={c.id} className={`flex items-center justify-between p-3 ${onSelect ? 'cursor-pointer' : ''}`} onClick={() => { if (onSelect) onSelect(c) }}>
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand/10 text-brand ring-1 ring-brand/30">{initials}</div>
-                  <div>
-                    <div className="text-sm font-semibold">{d.name} {d.surname}</div>
-                    <div className="text-xs text-gray-700">{d.email || c.email || ''}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <select className="rounded-md border p-1 text-sm" defaultValue={d.team || ''} onChange={(e) => updateTeam(c, e.currentTarget.value)}>
-                    <option value="">Team</option>
-                    {['U15', 'U16', 'U17', 'U19'].map((t) => (<option key={t} value={t}>{t}</option>))}
-                  </select>
-                </div>
-              </div>
-            )
-          })}
-          {list.length === 0 && <div className="py-2 text-sm text-gray-500">No coaches</div>}
-        </div>
-      </div>
-    </div>
   )
 }
 
@@ -603,31 +253,13 @@ function PlayerView({ players }: { players: any[] }) {
   // Show notification for recently approved/rejected fields
   useEffect(() => {
     if (approvedFields.length > 0 || rejectedFields.length > 0) {
-      const message = []
       if (approvedFields.length > 0) {
-        message.push(`${approvedFields.length} field${approvedFields.length > 1 ? 's' : ''} approved: ${approvedFields.join(', ')}`)
+        notifySuccess(`Profile updates reviewed — approved: ${approvedFields.join(', ')}`)
       }
       if (rejectedFields.length > 0) {
-        message.push(`${rejectedFields.length} field${rejectedFields.length > 1 ? 's' : ''} rejected: ${rejectedFields.join(', ')}`)
+        notifyWarning(`Profile updates reviewed — rejected: ${rejectedFields.join(', ')}`)
       }
-      
-      // Show notification (you could use a toast library here)
-      const notification = document.createElement('div')
-      notification.className = 'fixed top-4 right-4 z-50 rounded-md border bg-white p-3 shadow-lg'
-      notification.innerHTML = `
-        <div class="text-sm font-semibold">${message.join('. ')}</div>
-        <div class="mt-1 text-xs text-gray-600">Your profile updates have been reviewed</div>
-        <button class="mt-2 rounded-md border px-2 py-1 text-xs" onclick="this.parentElement.remove()">Dismiss</button>
-      `
-      document.body.appendChild(notification)
-      
-      // Auto-dismiss after 5 seconds
-      setTimeout(() => {
-        if (notification.parentElement) {
-          notification.remove()
-        }
-      }, 5000)
-      
+
       // Clear the proposals after showing notification
       setTimeout(() => {
         proposals.forEach(pp => {
@@ -763,33 +395,59 @@ function PlayerView({ players }: { players: any[] }) {
                 <div className="flex flex-wrap items-center gap-4 text-blue-100">
                   <span className="flex items-center gap-1">
                     <School className="h-4 w-4" />
-                    {data1.schoolId || 'No School Assigned'}
+                    {schoolNameOf(data1.schoolId) || 'No School Assigned'}
                   </span>
                   <span>•</span>
                   <span className="flex items-center gap-1">
                     <MapPin className="h-4 w-4" />
-                    {data1.zoneId || 'No Zone'}
+                    {zoneNameOf(data1.zoneId) || 'No Zone'}
                   </span>
                 </div>
               </div>
             </div>
             
             <div className="flex flex-col items-end gap-3">
-               {data1.ageGroup && (
-                <span className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm ring-1 ring-white/30">
-                  {data1.ageGroup}
-                </span>
-               )}
-               {data1.position && (
-                <span className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm ring-1 ring-white/30">
-                  {data1.position}
-                </span>
-               )}
-               {data1.jerseyNumber && (
-                <span className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm ring-1 ring-white/30">
-                  #{data1.jerseyNumber}
-                </span>
-               )}
+               <div className="relative">
+                 <button
+                   className="flex items-center gap-2 rounded-lg bg-white/15 px-4 py-2 text-sm font-medium text-white ring-1 ring-white/30 backdrop-blur-sm transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                   type="button"
+                   onClick={() => setActionsOpen((v) => !v)}
+                 >
+                   <MoreVertical size={16} />
+                   <span>Actions</span>
+                   <ChevronDown size={16} className={`transition-transform ${actionsOpen ? 'rotate-180' : ''}`} />
+                 </button>
+                 {actionsOpen && (
+                   <div className="absolute right-0 z-50 mt-2 w-64 origin-top-right rounded-lg border border-gray-100 bg-white p-1 text-gray-700 shadow-lg ring-1 ring-black/5">
+                     <button className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-gray-50" type="button" onClick={() => { setShowMissingInfo((v) => !v); setActionsOpen(false) }}>
+                       <FileText size={16} className="text-gray-400" /> Complete My Profile
+                     </button>
+                     <button className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-gray-50" type="button" onClick={() => { setShowSelfMigrate((v) => !v); setActionsOpen(false) }}>
+                       <School size={16} className="text-gray-400" /> Request School Transfer
+                     </button>
+                     <button className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-gray-50" type="button" onClick={() => { setShowApprovals((v) => !v); setActionsOpen(false) }}>
+                       <UserCheck size={16} className="text-gray-400" /> My Approval Requests
+                     </button>
+                   </div>
+                 )}
+               </div>
+               <div className="flex flex-wrap justify-end gap-2">
+                 {data1.ageGroup && (
+                  <span className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm ring-1 ring-white/30">
+                    {data1.ageGroup}
+                  </span>
+                 )}
+                 {data1.position && (
+                  <span className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm ring-1 ring-white/30">
+                    {data1.position}
+                  </span>
+                 )}
+                 {data1.jerseyNumber && (
+                  <span className="inline-flex items-center rounded-full bg-white/20 px-3 py-1 text-sm font-medium text-white backdrop-blur-sm ring-1 ring-white/30">
+                    #{data1.jerseyNumber}
+                  </span>
+                 )}
+               </div>
             </div>
           </div>
         </div>
@@ -816,7 +474,7 @@ function PlayerView({ players }: { players: any[] }) {
           )}
           <PlayerMissingForm
             id={me.id}
-            serverId={data1.serverId || ''}
+            serverId={data1.serverId || pid || ''}
             data={data1}
             lockedFields={locked}
             pendingFields={pendingFields}
@@ -906,6 +564,9 @@ function PlayerView({ players }: { players: any[] }) {
         </div>
       </div>
 
+      {/* Notifications Card */}
+      <PlayerNotifications />
+
       {/* Documents Card */}
       <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 px-4 py-3">
@@ -914,7 +575,8 @@ function PlayerView({ players }: { players: any[] }) {
              </div>
         </div>
         <div className="p-4">
-          <PlayerDocuments ownerId={data1.serverId || ''} refreshKey={refreshKey} />
+          <PlayerDocumentUpload ownerId={data1.serverId || pid || ''} onUploaded={() => setRefreshKey((k) => k + 1)} />
+          <PlayerDocuments ownerId={data1.serverId || pid || ''} refreshKey={refreshKey} />
         </div>
       </div>
 
@@ -924,6 +586,104 @@ function PlayerView({ players }: { players: any[] }) {
         </div>
       )}
     </div>
+  )
+}
+
+function PlayerNotifications() {
+  const [items, setItems] = useState<any[]>([])
+  const [expanded, setExpanded] = useState(false)
+  useEffect(() => {
+    ;(async () => {
+      const list = await getJsonPath('notifications')
+      if (Array.isArray(list)) setItems(list)
+    })()
+  }, [])
+  if (items.length === 0) return null
+  const unread = items.filter((n) => !n.readAt).length
+  const shown = expanded ? items : items.slice(0, 5)
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white shadow-sm" data-testid="player-notifications">
+      <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+          <AlertCircle size={18} className="text-brand" /> Notifications
+          {unread > 0 && (
+            <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-300">{unread} new</span>
+          )}
+        </div>
+        {unread > 0 && (
+          <button
+            className="text-xs font-medium text-brand hover:underline"
+            type="button"
+            onClick={async () => {
+              const res = await postJsonPath('notifications/read-all', {})
+              if (res.ok) setItems((prev) => prev.map((n) => ({ ...n, readAt: n.readAt || Date.now() })))
+            }}
+          >
+            Mark all read
+          </button>
+        )}
+      </div>
+      <div className="divide-y px-4">
+        {shown.map((n) => (
+          <div key={n.id} className="py-2.5 text-sm">
+            <div className="flex items-center gap-2">
+              {!n.readAt && <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" aria-hidden="true" />}
+              <span className="font-semibold text-gray-900">{n.subject}</span>
+              <span className="ml-auto shrink-0 text-xs text-gray-400">{n.createdAt ? new Date(Number(n.createdAt)).toLocaleString() : ''}</span>
+            </div>
+            {n.message && <div className="mt-0.5 text-gray-600">{n.message}</div>}
+          </div>
+        ))}
+      </div>
+      {items.length > 5 && (
+        <button className="w-full border-t px-4 py-2 text-center text-xs font-medium text-gray-500 hover:bg-gray-50" type="button" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? 'Show fewer' : `Show all ${items.length}`}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function PlayerDocumentUpload({ ownerId, onUploaded }: { ownerId: string; onUploaded: () => void }) {
+  const [busy, setBusy] = useState(false)
+  if (!ownerId) return null
+  return (
+    <label className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-gray-300 bg-gray-50 p-3 text-sm">
+      <span className="font-medium text-gray-700">Upload a document</span>
+      <span className="text-xs text-gray-500">ID copy, birth certificate, consent form… (PDF or image)</span>
+      <input
+        type="file"
+        accept="application/pdf,image/*"
+        disabled={busy}
+        className="text-sm"
+        onChange={async (e) => {
+          const file = e.target.files?.[0]
+          if (!file) return
+          setBusy(true)
+          try {
+            const fd = new FormData()
+            fd.append('file', file)
+            const t = getToken() || localStorage.getItem('auth:token') || ''
+            const res = await fetch(apiUrl('/upload'), { method: 'POST', headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: fd })
+            if (!res.ok) { notifyError('Upload failed. Please try again.'); return }
+            const data = await res.json()
+            const url = String(data.url || '')
+            const ok = await safePost('documents', { ownerType: 'players', ownerId, fileName: file.name, fileUrl: url })
+            if (ok) {
+              notifySuccess('Document uploaded — your school will review it.')
+              onUploaded()
+            } else {
+              notifyError('Could not save the document record.')
+            }
+          } catch {
+            notifyError('Upload failed. Please try again.')
+          } finally {
+            setBusy(false)
+            try { e.target.value = '' } catch {}
+          }
+        }}
+      />
+    </label>
   )
 }
 
@@ -956,7 +716,9 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
   const schoolId = localStorage.getItem('auth:schoolId') || ''
   const zoneId = localStorage.getItem('auth:zoneId') || ''
   const [schoolName, setSchoolName] = useState('')
+  const [schoolLogo, setSchoolLogo] = useState('')
   const [coachName, setCoachName] = useState('')
+  const [coachSelf, setCoachSelf] = useState<any | null>(null)
   const [assignedTeam, setAssignedTeam] = useState('')
   const [query, setQuery] = useState('')
   const [history, setHistory] = useState<string[]>(() => {
@@ -964,9 +726,10 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
   })
   const [showHistory, setShowHistory] = useState(false)
   const [pendingOnly, setPendingOnly] = useState(false)
+  const [currentSeasonOnly, setCurrentSeasonOnly] = useState(true)
   const [teamFilter, setTeamFilter] = useState<string>('')
   const [ageFilter, setAgeFilter] = useState<string>('')
-  const [activeTab, setActiveTab] = useState<'players' | 'pending' | 'metrics'>('players')
+  const [activeTab, setActiveTab] = useState<'players' | 'pending'>('players')
   const [pendingPlayers, setPendingPlayers] = useState<any[]>([])
   const [pendingApprovals, setPendingApprovals] = useState<any[]>([])
   const [pendingMigrationRequests, setPendingMigrationRequests] = useState<any[]>([])
@@ -1002,11 +765,13 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
         const schools = await fetchList('schools', { zoneId, schoolId })
         const s = Array.isArray(schools) && schools.length ? schools[0] : null
         setSchoolName(String(s?.data?.name || s?.name || schoolId || ''))
+        setSchoolLogo(String(s?.data?.logoUrl || ''))
         const coaches = await fetchList('coaches', { zoneId, schoolId })
         let c = Array.isArray(coaches) ? coaches.find((x: any) => String(x.data?.email || x.email || '').trim().toLowerCase() === email) : null
         if (!c && Array.isArray(coaches) && coaches.length) c = coaches[0]
         const nm = `${String(c?.data?.name || c?.name || '')} ${String(c?.data?.surname || c?.surname || '')}`.trim()
         setCoachName(nm || (email || ''))
+        setCoachSelf(c || null)
         setAssignedTeam(c?.data?.team || '')
       } catch (e) {
         console.error('Failed to load coach details', e)
@@ -1199,7 +964,7 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
     if (!p) return
     const rowZone = String(p.zoneId ?? p.data?.zoneId ?? '')
     const rowSchool = String(p.schoolId ?? p.data?.schoolId ?? '')
-    await login('Coach', rowZone, rowSchool)
+    await ensureSession()
     const res = await putJson('players', p.id || '', { [pp.field]: pp.value, schoolId: rowSchool, zoneId: rowZone })
     if (res) {
       setProposalStatus('Player', pp.id, 'approved')
@@ -1208,7 +973,7 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
       await onRefresh()
       return
     }
-    alert('Could not apply change to server. Kept as pending.')
+    notifyError('Could not apply the change to the server. It is kept as pending.')
   }
 
   async function rejectLocalProposal(pp: any) {
@@ -1321,6 +1086,9 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
   function applyFilters(p: any) {
     const dn = p.data || {}
 
+    // Default to this season's registrations; archived seasons are opt-in
+    if (currentSeasonOnly && seasonYearOf(p) !== currentSeasonYear()) return false
+
     // Apply pending filter
     if (pendingOnly) {
       if (!isPending(p)) return false
@@ -1401,7 +1169,7 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
     return 0
   })
   const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState({ name: '', surname: '', idNumber: '', phone: '', email: '' })
+  const [form, setForm] = useState({ name: '', surname: '', idNumber: '', phone: '', email: '', dob: '', gender: '', ageGroup: '', position: '', photoUrl: '' })
   const [selected, setSelected] = useState<any | null>(null)
   const [selectedMode, setSelectedMode] = useState<'edit' | 'docs'>('edit')
   const [folderStats, setFolderStats] = useState<{ year: number; count: number } | null>(null)
@@ -1462,21 +1230,29 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
     return ''
   }, [activeTab, migrationOutcomeSummary.count, migrationOutcomeSummary.newestTs, pendingSummary.newestTs, pendingSummary.registrationsCount, pendingSummary.total, pendingSummary.updatesCount, schoolId])
   async function addPlayer() {
+    if (!form.name.trim() || !form.surname.trim()) return notifyError('Name and surname are required')
+    if (form.email && !isEmail(form.email)) return notifyError('Invalid email address')
+    if (form.phone && !isPhoneZA(form.phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
+    if (form.idNumber && !isIdNumber(form.idNumber)) return notifyError('Invalid ID/Passport number')
     const payload: any = {
       name: form.name,
       surname: form.surname,
       idNumber: form.idNumber,
       contactNumber: form.phone,
+      phone: form.phone,
       email: form.email,
+      dob: form.dob,
+      dateOfBirth: form.dob,
+      gender: form.gender,
+      position: form.position,
+      photoUrl: form.photoUrl,
+      team: form.ageGroup || null,
       schoolId,
-      zoneId: localStorage.getItem('auth:zoneId') || zone || '',
-      ageGroup: null,
+      zoneId: localStorage.getItem('auth:zoneId') || zoneId || '',
+      ageGroup: form.ageGroup || null,
       dataOrigin: 'coach_add'
     }
-    if (form.email && !isEmail(form.email)) return
-    if (form.phone && !isPhoneZA(form.phone)) return
-    if (form.idNumber && !isIdNumber(form.idNumber)) return
-    await login('Coach', payload.zoneId, payload.schoolId)
+    await ensureSession()
     const res = await postJson('players', payload)
     if (res) {
       try {
@@ -1484,13 +1260,14 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
         localStorage.setItem('recent:player', JSON.stringify(recent))
       } catch {}
       emitRowAdded('players', res)
-      setForm({ name: '', surname: '', idNumber: '', phone: '', email: '' })
+      setForm({ name: '', surname: '', idNumber: '', phone: '', email: '', dob: '', gender: '', ageGroup: '', position: '', photoUrl: '' })
       setAdding(false)
+      notifySuccess(`${payload.name} ${payload.surname} added to your squad`)
       await onRefresh()
     }
     else {
       // Fallback: add locally so coach can see immediately
-      alert('Network or permission issue; added locally. Will sync when online.')
+      notifyWarning('Network or permission issue; the player was added locally and will sync when online.')
     }
   }
   return (
@@ -1504,19 +1281,56 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4xIj48Y2lyY2xlIGN4PSIzMCIgY3k9IjMwIiByPSIyIi8+PC9nPjwvZz48L3N2Zz4=')] opacity-30"></div>
         <div className="relative px-8 py-8">
           <div className="flex items-start justify-between">
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <UserCheck className="h-8 w-8 text-blue-100" />
-                <span className="text-blue-100 text-sm font-medium uppercase tracking-wider">
-                  Team Management {assignedTeam ? `• ${assignedTeam}` : ''}
-                </span>
+            <div className="flex items-center gap-6">
+              <div className="relative shrink-0 rounded-full bg-white/10 p-1 ring-4 ring-white/20 shadow-sm">
+                {coachPhotoUrl(coachSelf) ? (
+                  <img
+                    src={coachPhotoUrl(coachSelf)}
+                    alt="Coach"
+                    className="h-24 w-24 rounded-full object-cover"
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                  />
+                ) : (
+                  <div className="flex h-24 w-24 items-center justify-center rounded-full bg-white/10 text-3xl font-bold text-white">
+                    {(coachName || 'C').split(' ').map((w) => w.charAt(0)).join('').slice(0, 2).toUpperCase()}
+                  </div>
+                )}
               </div>
-              <h1 className="text-3xl font-bold mb-2">Welcome, {coachName || 'Coach'}</h1>
-              <div className="flex items-center gap-4 text-blue-100">
-                <span className="flex items-center gap-1">
-                  <School className="h-4 w-4" />
-                  {schoolName || 'No School'}
-                </span>
+              <div>
+                <div className="flex items-center gap-3 mb-2">
+                  <UserCheck className="h-6 w-6 text-blue-100" />
+                  <span className="text-blue-100 text-sm font-medium uppercase tracking-wider">
+                    Team Management {assignedTeam ? `• ${assignedTeam}` : ''}
+                  </span>
+                </div>
+                <h1 className="text-3xl font-bold mb-2">Welcome, {coachName || 'Coach'}</h1>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-blue-100">
+                  <span className="flex items-center gap-1">
+                    <School className="h-4 w-4" />
+                    {schoolName || 'No School'}
+                  </span>
+                  {coachSelf?.data?.position && (
+                    <span className="inline-flex items-center rounded-full bg-white/15 px-3 py-0.5 text-sm font-medium ring-1 ring-white/30">
+                      {coachSelf.data.position}
+                    </span>
+                  )}
+                  {coachSelf?.data?.qualifications && coachSelf.data.qualifications !== 'None' && (
+                    <span className="inline-flex items-center rounded-full bg-white/15 px-3 py-0.5 text-sm font-medium ring-1 ring-white/30">
+                      {coachSelf.data.qualifications}
+                    </span>
+                  )}
+                  {coachSelf?.data?.experience && (
+                    <span className="inline-flex items-center rounded-full bg-white/15 px-3 py-0.5 text-sm font-medium ring-1 ring-white/30">
+                      {coachSelf.data.experience} yrs experience
+                    </span>
+                  )}
+                  {(coachSelf?.data?.email || '') && (
+                    <span className="hidden items-center gap-1 text-sm sm:inline-flex">
+                      <Mail className="h-4 w-4" />
+                      {coachSelf.data.email}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
             <div className="text-right">
@@ -1575,15 +1389,6 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
             >
               <AlertCircle className="h-4 w-4" />
               Pending ({pendingSummary.total})
-            </button>
-          )}
-          {(role === 'EPHSRUAdmin' || role === 'SchoolAdmin') && (
-            <button 
-              className={`flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${activeTab === 'metrics' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
-              onClick={() => setActiveTab('metrics')}
-            >
-              <Activity className="h-4 w-4" />
-              System Metrics
             </button>
           )}
         </nav>
@@ -1668,7 +1473,7 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
                   <div key={String(r?.id || '')} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
                     <div>
                       <span className="font-semibold">{String(p.name || '')} {String(p.surname || '')}</span>
-                      <span className="ml-2 text-gray-700">• {fromSchoolId} → {toSchoolId}</span>
+                      <span className="ml-2 text-gray-700">• {schoolNameOf(fromSchoolId)} → {schoolNameOf(toSchoolId)}</span>
                       <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-300">Needs Review</span>
                     </div>
                     <div className="flex gap-2">
@@ -1698,7 +1503,7 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
                   <div key={String(r?.id || '')} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
                     <div>
                       <span className="font-semibold">{String(p.name || '')} {String(p.surname || '')}</span>
-                      <span className="ml-2 text-gray-700">• {fromSchoolId} → {toSchoolId}</span>
+                      <span className="ml-2 text-gray-700">• {schoolNameOf(fromSchoolId)} → {schoolNameOf(toSchoolId)}</span>
                       <span className={status === 'accepted' ? 'ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700 ring-1 ring-green-300' : 'ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 ring-1 ring-red-300'}>
                         {status || '—'}
                       </span>
@@ -1739,7 +1544,7 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
                 </div>
                 <div className="rounded-md border p-3">
                   <div className="text-sm font-semibold">Transfer</div>
-                  <div className="mt-2 text-sm text-gray-700">From <span className="font-medium">{String(migrationDetail?.fromSchoolId || '')}</span> to <span className="font-medium">{String(migrationDetail?.toSchoolId || '')}</span></div>
+                  <div className="mt-2 text-sm text-gray-700">From <span className="font-medium">{schoolNameOf(migrationDetail?.fromSchoolId)}</span> to <span className="font-medium">{schoolNameOf(migrationDetail?.toSchoolId)}</span></div>
                   <div className="mt-1 text-sm text-gray-700">Reason: <span className="font-medium">{String(migrationDetail?.reason || '') || '—'}</span></div>
                   <div className="mt-1 text-xs text-gray-600">Requested by: {String(migrationDetail?.requesterRole || '') || '—'} {String(migrationDetail?.requesterEmail || '') || ''}</div>
                 </div>
@@ -1751,11 +1556,6 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
             )}
           </div>
         </div>
-      )}
-      
-      {/* Metrics Tab */}
-      {activeTab === 'metrics' && (
-        <MetricsDashboard />
       )}
       
       {/* Players Tab */}
@@ -1789,6 +1589,7 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
         {(role === 'Coach' || role === 'SchoolAdmin' || role === 'EPHSRUAdmin') && (
           <button className={`rounded-md px-3 py-2 ${showMigration ? 'bg-blue-600 text-white' : 'border'}`} onClick={() => setShowMigration((v) => !v)}>{showMigration ? 'Close Migration' : 'Migrate Player'}</button>
         )}
+        <ExportMenu players={hierView ? list : listFiltered} schoolName={schoolName} logoUrl={schoolLogo} />
         <button className="rounded-md bg-brand px-3 py-2 text-white" onClick={() => setAdding((v) => !v)}>{adding ? 'Cancel' : 'Add Player'}</button>
       </div>
 
@@ -1836,10 +1637,16 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
 
       {!hierView && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={pendingOnly} onChange={(e) => setPendingOnly(e.target.checked)} />
-            Show only players needing review
-          </label>
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={pendingOnly} onChange={(e) => setPendingOnly(e.target.checked)} />
+              Show only players needing review
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={currentSeasonOnly} onChange={(e) => setCurrentSeasonOnly(e.target.checked)} />
+              Current season only ({currentSeasonYear()})
+            </label>
+          </div>
           <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Player view">
             <button
               type="button"
@@ -1875,12 +1682,71 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
       
       {adding && (
         <div className="mb-3 rounded-md border p-3">
+          <div className="mb-3 flex items-center gap-2 border-b pb-2">
+            <Users size={16} className="text-brand" />
+            <span className="text-sm font-semibold text-gray-900">Register New Player</span>
+            <span className="text-xs text-gray-500">— added to {schoolName || 'your school'} for the {new Date().getFullYear()} season</span>
+          </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block"><span className="text-sm font-medium">Name</span><input className="mt-1 w-full rounded-md border p-2" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
             <label className="block"><span className="text-sm font-medium">Surname</span><input className="mt-1 w-full rounded-md border p-2" value={form.surname} onChange={(e) => setForm({ ...form, surname: e.target.value })} /></label>
             <label className="block"><span className="text-sm font-medium">ID/Passport</span><input className="mt-1 w-full rounded-md border p-2" value={form.idNumber} onChange={(e) => setForm({ ...form, idNumber: e.target.value })} /></label>
             <label className="block"><span className="text-sm font-medium">Mobile</span><input className="mt-1 w-full rounded-md border p-2" placeholder="+27" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
             <label className="block sm:col-span-2"><span className="text-sm font-medium">Email</span><input type="email" className="mt-1 w-full rounded-md border p-2" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
+            <label className="block"><span className="text-sm font-medium">Date of Birth</span><input type="date" className="mt-1 w-full rounded-md border p-2" value={form.dob} onChange={(e) => setForm({ ...form, dob: e.target.value })} /></label>
+            <label className="block"><span className="text-sm font-medium">Gender</span>
+              <select className="mt-1 w-full rounded-md border p-2" value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
+                <option value="">Select...</option>
+                <option>Male</option>
+                <option>Female</option>
+              </select>
+            </label>
+            <label className="block"><span className="text-sm font-medium">Age Group</span>
+              <select className="mt-1 w-full rounded-md border p-2" value={form.ageGroup} onChange={(e) => setForm({ ...form, ageGroup: e.target.value })}>
+                <option value="">Select...</option>
+                {AGE_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </label>
+            <label className="block"><span className="text-sm font-medium">Position</span>
+              <select className="mt-1 w-full rounded-md border p-2" value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })}>
+                <option value="">Select...</option>
+                {POSITIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+            <label className="block sm:col-span-2"><span className="text-sm font-medium">Profile Photo</span>
+              <input
+                type="file"
+                accept="image/*"
+                className="mt-1 w-full rounded-md border p-2"
+                onChange={async (e) => {
+                  const raw = e.target.files?.[0]
+                  if (!raw) return
+                  const file = await resizeImage(raw)
+                  const fd = new FormData()
+                  fd.append('file', file)
+                  try {
+                    const t = getToken() || localStorage.getItem('auth:token') || ''
+                    const res = await fetch(apiUrl('/upload'), { method: 'POST', headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: fd })
+                    if (res.ok) {
+                      const data = await res.json()
+                      setForm((prev: any) => ({ ...prev, photoUrl: String(data.url || '') }))
+                    } else {
+                      notifyError('Photo upload failed')
+                    }
+                  } catch {
+                    notifyError('Photo upload failed')
+                  }
+                }}
+              />
+              {form.photoUrl && (
+                <img
+                  src={form.photoUrl.startsWith('/uploads') ? `${API_ORIGIN}${form.photoUrl}` : form.photoUrl}
+                  alt="Player"
+                  className="mt-2 h-14 w-14 rounded-full object-cover ring-1 ring-gray-300"
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                />
+              )}
+            </label>
           </div>
           <div className="mt-3 text-right"><button className="rounded-md bg-brand px-3 py-2 text-white" onClick={addPlayer}>Save Player</button></div>
         </div>
@@ -1893,6 +1759,8 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
           onStats={setFolderStats}
           viewMode={resultsView}
           onViewModeChange={setResultsView}
+          onRefresh={onRefresh}
+          exportMeta={{ schoolName, logoUrl: schoolLogo }}
         />
       ) : (
         <div className={`rounded-lg border bg-white p-3 shadow transition-opacity duration-150 ${resultsSwitching ? 'opacity-0' : 'opacity-100'}`}>
@@ -2005,7 +1873,7 @@ function CoachPlayerRow({ player, hasPending, isRecent, onUpdated, onSelect }) {
                 <div className="mt-1 flex flex-wrap gap-2">
                   <span className="inline-flex items-center rounded-full bg-brand/10 px-2 py-0.5 text-xs font-semibold text-brand ring-1 ring-brand/30">{d.position || 'Position —'}</span>
                   <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 ring-1 ring-gray-300">{d.ageGroup || 'Age Group —'}</span>
-                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 ring-1 ring-gray-300">{d.schoolId || player.schoolId || 'School —'}</span>
+                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 ring-1 ring-gray-300">{schoolNameOf(d.schoolId || player.schoolId) || 'School —'}</span>
                 </div>
               </div>
             </div>
@@ -2027,7 +1895,7 @@ function CoachPlayerRow({ player, hasPending, isRecent, onUpdated, onSelect }) {
     </div>
   )
 }
-function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewMode, onViewModeChange }: { players: any[]; onSelect: (p: any) => void; currentYearOnly?: boolean; onStats?: (stats: { year: number; count: number }) => void; viewMode: 'cards' | 'list'; onViewModeChange: (next: 'cards' | 'list') => void }) {
+function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewMode, onViewModeChange, onRefresh, exportMeta }: { players: any[]; onSelect: (p: any) => void; currentYearOnly?: boolean; onStats?: (stats: { year: number; count: number }) => void; viewMode: 'cards' | 'list'; onViewModeChange: (next: 'cards' | 'list') => void; onRefresh?: () => void; exportMeta?: { schoolName?: string; logoUrl?: string } }) {
   const systemYear = new Date().getFullYear()
   const yearTouchedRef = useRef(false)
   function inferYearFromTs(rawTs: any) {
@@ -2220,6 +2088,30 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
   const level = genderSel ? (teamSel ? 'players' : 'team') : 'gender'
   const items = level === 'gender' ? genders : teams
   const filteredItems = items.filter((it: any) => it.name.toLowerCase().includes(search.toLowerCase()))
+  const [reregistering, setReregistering] = useState(false)
+  // Players whose registration is genuinely from a past season (not already rolled over)
+  const reregisterTargets = useMemo(() => {
+    if (yearSel >= systemYear) return []
+    return playersForSelectedYear.filter((p) => registrationYearOf(p) < systemYear && p.id)
+  }, [playersForSelectedYear, yearSel, systemYear])
+  async function reregisterSeason() {
+    if (reregisterTargets.length === 0) return
+    if (!confirm(`Re-register ${reregisterTargets.length} player${reregisterTargets.length === 1 ? '' : 's'} for the ${systemYear} season? Age groups are promoted automatically (U15 → U16 → U17 → U19).`)) return
+    setReregistering(true)
+    try {
+      await ensureSession()
+      const res = await postJsonPath('players/bulk-reregister', { playerIds: reregisterTargets.map((p) => p.id) })
+      if (res.ok) {
+        const n = (res.data as any)?.successful ?? reregisterTargets.length
+        notifySuccess(`${n} player${n === 1 ? '' : 's'} re-registered for ${systemYear}`)
+        onRefresh?.()
+      } else {
+        notifyError('Re-registration failed. Please try again.')
+      }
+    } finally {
+      setReregistering(false)
+    }
+  }
   return (
     <div className="rounded-lg border bg-white p-3 shadow">
       <div className="mb-3 flex flex-wrap gap-2" data-folder-level="year">
@@ -2250,7 +2142,20 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
           {teamSel && <> / <span className="underline">{teamSel}</span></>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {level === 'players' && reregisterTargets.length > 0 && (
+            <button
+              type="button"
+              className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+              disabled={reregistering}
+              onClick={reregisterSeason}
+            >
+              {reregistering ? 'Re-registering…' : `Re-register ${reregisterTargets.length} for ${systemYear}`}
+            </button>
+          )}
           <input className="w-40 rounded-md border p-2 text-sm sm:w-56" placeholder="Filter..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          {level === 'players' && finalPlayers.length > 0 && (
+            <ExportMenu players={finalPlayers} schoolName={exportMeta?.schoolName} logoUrl={exportMeta?.logoUrl} label={`Export ${teamSel || 'team'}`} />
+          )}
           {level === 'players' && (
             <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Player view">
               <button
@@ -2324,7 +2229,7 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
                         </td>
                         <td className="border-b px-3 py-2">{d.surname}</td>
                         <td className="border-b px-3 py-2 hidden sm:table-cell">{String(d.position || '—')}</td>
-                        <td className="border-b px-3 py-2 hidden md:table-cell">{String(d.schoolId || '')}</td>
+                        <td className="border-b px-3 py-2 hidden md:table-cell">{schoolNameOf(d.schoolId)}</td>
                       </tr>
                     )
                   })}
@@ -2397,9 +2302,9 @@ function CoachPlayerDetail({ player, mode, onBack, onUpdated }: { player: any; m
               <div className="mb-1 hidden sm:block">
                 <h1 className="text-2xl font-bold text-gray-900">{d.name} {d.surname}</h1>
                 <div className="flex items-center gap-2 text-gray-600 text-sm">
-                  <School size={16} /> <span>{d.schoolId || 'No School Assigned'}</span>
+                  <School size={16} /> <span>{schoolNameOf(d.schoolId) || 'No School Assigned'}</span>
                   {d.zoneId && <span className="text-gray-300">•</span>}
-                  {d.zoneId && <span>{d.zoneId}</span>}
+                  {d.zoneId && <span>{zoneNameOf(d.zoneId)}</span>}
                 </div>
               </div>
             </div>
@@ -2581,7 +2486,7 @@ function CoachPlayerDetail({ player, mode, onBack, onUpdated }: { player: any; m
                 <button className="rounded-md border px-2 py-1" onClick={async () => {
                   const rowZone = (player.zoneId ?? d.zoneId ?? '') as string
                   const rowSchool = (player.schoolId ?? d.schoolId ?? '') as string
-                  await login('Coach', rowZone, rowSchool)
+                  await ensureSession()
                   const res = await putJson('players', player.id || '', { [pp.field]: pp.value, schoolId: rowSchool, zoneId: rowZone })
                   if (res) {
                     setProposalStatus('Player', pp.id, 'approved')
@@ -2666,7 +2571,7 @@ function CoachPlayerEditor({ player, onUpdated, onClose }: { player: any; onUpda
     if (k === 'idNumber' && value && !isIdNumber(value)) return
     const rowZone = (player.zoneId ?? d.zoneId ?? '') as string
     const rowSchool = (player.schoolId ?? d.schoolId ?? '') as string
-    await login('Coach', rowZone, rowSchool)
+    await ensureSession()
     const res = await putJson('players', id, { [k]: value, schoolId: rowSchool, zoneId: rowZone })
     if (res) {
       const parsed = typeof res?.data === 'string' ? (() => { try { return JSON.parse(res.data || '{}') } catch { return {} } })() : (res?.data || {})
@@ -2706,7 +2611,7 @@ function CoachPlayerEditor({ player, onUpdated, onClose }: { player: any; onUpda
     if (!Object.keys(updates).length) return onClose()
     const rowZone = (player.zoneId ?? d.zoneId ?? '') as string
     const rowSchool = (player.schoolId ?? d.schoolId ?? '') as string
-    await login('Coach', rowZone, rowSchool)
+    await ensureSession()
     const res = await putJson('players', id, { ...updates, schoolId: rowSchool, zoneId: rowZone })
     if (res) {
       const parsed = typeof res?.data === 'string' ? (() => { try { return JSON.parse(res.data || '{}') } catch { return {} } })() : (res?.data || {})
@@ -3231,7 +3136,7 @@ function PendingPlayersView({ players, loading, onApprove, onReject, onBulkAppro
                       {d.name} {d.surname}
                     </div>
                     <div className="text-sm text-gray-600">
-                      {d.ageGroup || '—'} • {d.schoolId || player.schoolId || '—'}
+                      {d.ageGroup || '—'} • {schoolNameOf(d.schoolId || player.schoolId) || '—'}
                     </div>
                     <div className="text-sm text-gray-600">
                       {d.email || '—'}
@@ -3303,42 +3208,6 @@ function PendingPlayersView({ players, loading, onApprove, onReject, onBulkAppro
     </div>
   )
 }
-function ManageMyAdmin({ zone, school, onUpdated }: { zone?: string; school?: string; onUpdated: () => void }) {
-  const [admin, setAdmin] = useState<any | null>(null)
-  const [vals, setVals] = useState<{ name: string; surname: string; email: string } | null>(null)
-  useEffect(() => { load() }, [zone, school])
-  async function load() {
-    const email = localStorage.getItem('auth:email') || ''
-    const list = await fetchList('admins', { zoneId: zone, schoolId: school })
-    const me = list.find((a: any) => String(a.email || a.data?.email || '') === email)
-    setAdmin(me || null)
-    if (me) setVals({ name: me.data?.name || me.name || '', surname: me.data?.surname || me.surname || '', email: me.data?.email || me.email || '' })
-  }
-  async function save() {
-    if (!admin || !vals) return
-    await login('SchoolAdmin', zone, school, vals.email)
-    const ok = await safePut('admins', admin.id, { name: vals.name, surname: vals.surname, email: vals.email, zoneId: zone, schoolId: school })
-    if (ok) { await load(); await onUpdated() }
-  }
-  if (!admin) return (
-    <div className="rounded-lg border bg-white p-3 shadow">
-      <div className="text-sm text-gray-600">No admin record found for your account</div>
-    </div>
-  )
-  return (
-    <div className="rounded-lg border bg-white p-3 shadow">
-      <div className="mb-3 text-base font-semibold">My Admin Details</div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <label className="block"><span className="text-xs font-medium">Name</span><input className="mt-1 w-full rounded-md border p-2 text-sm" value={vals?.name || ''} onChange={(e) => setVals((v) => ({ ...(v as any), name: e.target.value }))} /></label>
-        <label className="block"><span className="text-xs font-medium">Surname</span><input className="mt-1 w-full rounded-md border p-2 text-sm" value={vals?.surname || ''} onChange={(e) => setVals((v) => ({ ...(v as any), surname: e.target.value }))} /></label>
-        <label className="block sm:col-span-2"><span className="text-xs font-medium">Email</span><input type="email" className="mt-1 w-full rounded-md border p-2 text-sm" value={vals?.email || ''} onChange={(e) => setVals((v) => ({ ...(v as any), email: e.target.value }))} /></label>
-        <div className="sm:col-span-2 text-right">
-          <button className="rounded-md bg-brand px-3 py-1 text-white" onClick={save}>Save</button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function RefereeDashboard({ referees }: { referees: any[] }) {
   return (
@@ -3371,239 +3240,6 @@ function RefereeDashboard({ referees }: { referees: any[] }) {
           ))}
           {referees.length === 0 && <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">No referees found</div>}
         </div>
-      </div>
-    </div>
-  )
-}
-
-function EPHSRUAdminDashboard({ schools, admins, referees }: { schools: any[]; admins: any[]; referees: any[] }) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'schools' | 'admins' | 'referees'>('overview')
-  const [searchQuery, setSearchQuery] = useState('')
-
-  // EPHSRU statistics
-  const stats = useMemo(() => {
-    return {
-      totalSchools: schools.length,
-      totalAdmins: admins.length,
-      totalReferees: referees.length,
-    }
-  }, [schools, admins, referees])
-
-  const filteredSchools = useMemo(() => {
-    if (!searchQuery) return schools
-    const q = searchQuery.toLowerCase()
-    return schools.filter(s => (s.name || '').toLowerCase().includes(q))
-  }, [schools, searchQuery])
-
-  const filteredAdmins = useMemo(() => {
-    if (!searchQuery) return admins
-    const q = searchQuery.toLowerCase()
-    return admins.filter(a => (a.data?.name || '').toLowerCase().includes(q) || (a.data?.surname || '').toLowerCase().includes(q))
-  }, [admins, searchQuery])
-
-  const filteredReferees = useMemo(() => {
-    if (!searchQuery) return referees
-    const q = searchQuery.toLowerCase()
-    return referees.filter(r => (r.data?.name || '').toLowerCase().includes(q) || (r.data?.surname || '').toLowerCase().includes(q))
-  }, [referees, searchQuery])
-
-  return (
-    <div className="space-y-6">
-      {/* EPHSRU Header Card */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-700 via-blue-600 to-blue-500 text-white shadow-xl">
-        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4xIj48Y2lyY2xlIGN4PSIzMCIgY3k9IjMwIiByPSIyIi8+PC9nPjwvZz48L3N2Zz4=')] opacity-30"></div>
-        <div className="relative px-8 py-8">
-          <div className="flex items-start justify-between">
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <Crown className="h-8 w-8 text-blue-100" />
-                <span className="text-blue-100 text-sm font-medium uppercase tracking-wider">System Administration</span>
-              </div>
-              <h1 className="text-3xl font-bold mb-2">EPHSRU Dashboard</h1>
-              <div className="text-blue-100">Manage schools, zones, and system settings</div>
-            </div>
-            <div className="text-right">
-              <div className="text-4xl font-bold">{schools.length}</div>
-              <div className="text-blue-100 text-sm">Registered Schools</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Stats Overview Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div className="rounded-xl border bg-white p-5 shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <div className="rounded-lg bg-blue-50 p-2">
-              <School className="h-5 w-5 text-blue-600" />
-            </div>
-          </div>
-          <div className="text-2xl font-bold text-gray-900">{stats.totalSchools}</div>
-          <div className="text-sm text-gray-500">Total Schools</div>
-        </div>
-        <div className="rounded-xl border bg-white p-5 shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <div className="rounded-lg bg-amber-50 p-2">
-              <Shield className="h-5 w-5 text-amber-600" />
-            </div>
-          </div>
-          <div className="text-2xl font-bold text-gray-900">{stats.totalAdmins}</div>
-          <div className="text-sm text-gray-500">School Admins</div>
-        </div>
-        <div className="rounded-xl border bg-white p-5 shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <div className="rounded-lg bg-emerald-50 p-2">
-              <UserCheck className="h-5 w-5 text-emerald-600" />
-            </div>
-          </div>
-          <div className="text-2xl font-bold text-gray-900">{stats.totalReferees}</div>
-          <div className="text-sm text-gray-500">Referees</div>
-        </div>
-      </div>
-
-      {/* Tab Navigation */}
-      <div className="border-b border-gray-200">
-        <nav className="flex space-x-8">
-          {[
-            { id: 'overview', label: 'Overview', icon: Activity },
-            { id: 'schools', label: 'Schools', icon: School },
-            { id: 'admins', label: 'School Admins', icon: Shield },
-            { id: 'referees', label: 'Referees', icon: UserCheck },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === tab.id
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <tab.icon className="h-4 w-4" />
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      </div>
-
-      <div className="min-h-[400px]">
-        {/* OVERVIEW TAB */}
-        {activeTab === 'overview' && (
-          <div className="space-y-6">
-             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="rounded-xl border bg-white p-6 shadow-sm">
-                  <h3 className="text-lg font-semibold mb-4">System Status</h3>
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                      <span className="text-gray-600">Active Schools</span>
-                      <span className="text-xl font-bold text-gray-900">{stats.totalSchools}</span>
-                    </div>
-                     <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                      <span className="text-gray-600">Total Referees</span>
-                      <span className="text-xl font-bold text-gray-900">{stats.totalReferees}</span>
-                    </div>
-                  </div>
-                </div>
-             </div>
-          </div>
-        )}
-
-        {/* SCHOOLS TAB */}
-        {activeTab === 'schools' && (
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Schools Directory</h3>
-               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search schools..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-              {filteredSchools.map((s) => (<SchoolCard key={s.id} school={s} />))}
-              {filteredSchools.length === 0 && <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">No schools registered</div>}
-            </div>
-          </div>
-        )}
-
-        {/* ADMINS TAB */}
-        {activeTab === 'admins' && (
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">School Administrators</h3>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search admins..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-              {filteredAdmins.map((a) => (
-                <div key={a.id} className="group relative overflow-hidden rounded-xl bg-white p-6 shadow-sm ring-1 ring-gray-200 transition-all hover:shadow-md hover:ring-blue-200">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="h-12 w-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-lg">
-                      {String(a.data?.name || a.name || '').charAt(0)}{String(a.data?.surname || a.surname || '').charAt(0)}
-                    </div>
-                    <div>
-                      <h4 className="font-semibold text-gray-900">{String(a.data?.name || a.name || '')} {String(a.data?.surname || a.surname || '')}</h4>
-                      <p className="text-xs text-gray-500">{a.email || a.data?.email}</p>
-                    </div>
-                  </div>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center justify-between text-gray-600">
-                      <span className="flex items-center gap-2"><School className="h-4 w-4 text-gray-400" /> School</span>
-                      <span className="font-medium">{String(a.data?.schoolId || a.schoolId || '—')}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-gray-600">
-                      <span className="flex items-center gap-2"><MapPin className="h-4 w-4 text-gray-400" /> Zone</span>
-                      <span className="font-medium">{String(a.data?.zoneId || a.zoneId || '—')}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {filteredAdmins.length === 0 && <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">No school admins found</div>}
-            </div>
-          </div>
-        )}
-
-        {/* REFEREES TAB */}
-        {activeTab === 'referees' && (
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">All Referees</h3>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search referees..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-              {filteredReferees.map((r) => (
-                <RefereeCard key={r.id} referee={r} badge={String(r.data?.zoneId || '—')} />
-              ))}
-              {filteredReferees.length === 0 && (
-                <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">
-                  No referees found
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )

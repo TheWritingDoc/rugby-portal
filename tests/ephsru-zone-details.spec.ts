@@ -44,7 +44,7 @@ test.describe('EPHSRU Admin Zone Details', () => {
     await page.screenshot({ path: 'test-results/screenshots/zone-details.png', fullPage: true });
 
     // 4. Verify Coordinator Info
-    await expect(page.getByText('Coordinator')).toBeVisible();
+    await expect(page.getByText('Coordinator', { exact: true }).first()).toBeVisible();
     
     // 5. Verify Schools List
     // Check for Gammel Street (Active)

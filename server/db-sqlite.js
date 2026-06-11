@@ -12,6 +12,11 @@ if (!fs.existsSync(dbDir)) {
 }
 
 const db = new Database.Database(dbPath)
+// WAL allows concurrent readers during writes; busy_timeout retries instead of failing with SQLITE_BUSY
+db.serialize(() => {
+  db.run('PRAGMA journal_mode = WAL')
+  db.run('PRAGMA busy_timeout = 5000')
+})
 
 function parseSchoolsFromMd(md) {
   const lines = String(md || '').split(/\r?\n/)
@@ -260,13 +265,39 @@ db.serialize(() => {
       status TEXT DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
       requestedChanges TEXT,
       approverNotes TEXT,
+      deciderRole TEXT, -- role that made the last decision (for override hierarchy)
       createdAt INTEGER NOT NULL,
       updatedAt INTEGER,
       FOREIGN KEY (entityId) REFERENCES players(id) ON DELETE CASCADE,
       FOREIGN KEY (entityId) REFERENCES coaches(id) ON DELETE CASCADE
     )
   `)
+  // Migration for databases created before deciderRole existed
+  try { db.run('ALTER TABLE approvals ADD COLUMN deciderRole TEXT', () => {}) } catch {}
   
+  // Password reset tokens (consumed on use, expire after 1 hour)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      token TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      expiresAt INTEGER NOT NULL
+    )
+  `)
+
+  // Notification outbox: stored per recipient email and shown in-app; an email/SMS
+  // provider can drain the same table later without schema changes
+  db.run(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      message TEXT,
+      readAt INTEGER,
+      createdAt INTEGER NOT NULL
+    )
+  `)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_notifications_email ON notifications(email, createdAt)`)
+
   // Create indexes for performance
   db.run(`CREATE INDEX IF NOT EXISTS idx_approvals_entity ON approvals(entityType, entityId)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`)

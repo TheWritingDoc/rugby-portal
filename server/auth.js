@@ -1,6 +1,12 @@
 import jwt from 'jsonwebtoken'
 
-const SECRET = 'ephsru_dev_secret'
+const env = process.env.NODE_ENV || 'development'
+const SECRET = process.env.JWT_SECRET || (env === 'production' ? '' : 'ephsru_dev_secret')
+
+if (!SECRET) {
+  // Refuse to boot a production server with a guessable signing key
+  throw new Error('JWT_SECRET environment variable is required in production')
+}
 
 export function sign(payload) {
   return jwt.sign(payload, SECRET, { expiresIn: '12h' })

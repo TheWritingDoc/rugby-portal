@@ -8,9 +8,39 @@ import db from './db-sqlite.js'
 import bcrypt from 'bcryptjs'
 
 const app = express()
-app.use(cors())
+// In production, restrict cross-origin access to the deployed frontend (comma-separated env list)
+const allowedOrigins = String(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)
+app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : undefined))
 app.use(express.json({ limit: '2mb' }))
 app.use(verifyToken)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  if ((process.env.NODE_ENV || 'development') === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  }
+  next()
+})
+
+// Sliding-window rate limiter for credential endpoints (in-memory; per-IP)
+const rateBuckets = new Map()
+function rateLimit(maxHits, windowMs) {
+  return (req, res, next) => {
+    const key = `${req.path}:${req.ip || req.socket?.remoteAddress || 'unknown'}`
+    const now = Date.now()
+    const hits = (rateBuckets.get(key) || []).filter((t) => now - t < windowMs)
+    if (hits.length >= maxHits) {
+      return res.status(429).json({ error: 'too_many_requests', retryAfterMs: windowMs - (now - hits[0]) })
+    }
+    hits.push(now)
+    rateBuckets.set(key, hits)
+    if (rateBuckets.size > 10000) rateBuckets.clear()
+    next()
+  }
+}
+const isProd = (process.env.NODE_ENV || 'development') === 'production'
+app.use('/api/auth/', rateLimit(isProd ? 20 : 500, 60_000))
+app.use('/api/login', rateLimit(isProd ? 60 : 1000, 60_000))
 
 // Enrich req.user with scope from DB if missing
 app.use((req, _res, next) => {
@@ -47,6 +77,22 @@ function writeAudit(userRole, entity, action, beforeObj, afterObj) {
     const before = beforeObj ? JSON.stringify(beforeObj) : null
     const after = afterObj ? JSON.stringify(afterObj) : null
     db.run('INSERT INTO audits (id, userRole, entity, action, before, after, ts) VALUES (?, ?, ?, ?, ?, ?, ?)', [id, String(userRole || ''), String(entity), String(action), before, after, ts])
+  } catch {}
+}
+
+// Notification outbox: every workflow outcome lands here per recipient email and is
+// shown in-app. EMAIL INTEGRATION POINT: hook a mail/SMS provider here to also
+// deliver externally — the table already holds everything a sender needs.
+function queueNotification(email, subject, message) {
+  try {
+    const e = String(email || '').trim().toLowerCase()
+    if (!e) return
+    const id = crypto.randomUUID()
+    db.run(
+      'INSERT INTO notifications (id, email, subject, message, readAt, createdAt) VALUES (?, ?, ?, ?, NULL, ?)',
+      [id, e, String(subject || ''), String(message || ''), Date.now()]
+    )
+    console.log(`[notify] ${e}: ${subject}`)
   } catch {}
 }
 
@@ -164,9 +210,12 @@ function allowUpdate(type, role, user, entity) {
   }
   if (role === 'EPHSRUAdmin') return true
   if (type === 'players' && (role === 'Coach' || role === 'SchoolAdmin')) {
-    return true
+    // Coaches and school admins may only update players of their own school
+    return String(entity.schoolId ?? '') === String(user.schoolId ?? '')
   }
-  if (type === 'referees' && (role === 'EPHSRUAdmin' || role === 'ZoneCoordinator')) return true
+  if (type === 'referees' && role === 'ZoneCoordinator') {
+    return String(entity.zoneId ?? '') === String(user.zoneId ?? '')
+  }
   if (type === 'players' && role === 'ZoneCoordinator') {
     return String(entity.zoneId ?? '') === String(user.zoneId ?? '')
   }
@@ -176,6 +225,9 @@ function allowUpdate(type, role, user, entity) {
   }
   if (type === 'schools' && role === 'SchoolAdmin') {
     return String(entity.schoolId ?? '') === String(user.schoolId ?? '')
+  }
+  if (type === 'schools' && role === 'ZoneCoordinator') {
+    return String(entity.zoneId ?? '') === String(user.zoneId ?? '')
   }
   if (type === 'admins' && role === 'SchoolAdmin') {
     return String(entity.schoolId ?? '') === String(user.schoolId ?? '') &&
@@ -230,6 +282,10 @@ function filterByRole(type, list, user) {
   if (role === 'Coach') return list.filter((x) => String(x.schoolId ?? '') === String(user.schoolId ?? ''))
   if (role === 'Player') {
     if (type === 'players') return list.filter((x) => String(x.email ?? '') === String(user.email ?? ''))
+    return []
+  }
+  if (role === 'Referee') {
+    if (type === 'referees') return list.filter((x) => String(x.zoneId ?? '') === String(user.zoneId ?? ''))
     return []
   }
   return []
@@ -465,6 +521,14 @@ app.post('/api/approvals/:id/decision', async (req, res) => {
             writeAudit(role, 'approvals', 'decision', { id, status: prevStatus }, { id, status, approverId, notes, updatedAt: now, deciderRole: role })
             const requester = await resolveUserDisplay(approval.requesterId).catch(() => null)
             const approver = await resolveUserDisplay(approverId).catch(() => null)
+            const fieldList = changes.map((c) => c.field).join(', ') || 'profile details'
+            queueNotification(
+              approval.requesterId,
+              status === 'approved' ? 'Profile update approved' : 'Profile update rejected',
+              status === 'approved'
+                ? `Your requested change to ${fieldList} has been approved and applied.`
+                : `Your requested change to ${fieldList} was not approved.${notes ? ` Note: ${notes}` : ''}`
+            )
             res.json({ id, prevStatus, status, requester, approver, updatedAt: now, player: updatedPlayer || null })
           }
         )
@@ -512,7 +576,8 @@ app.get('/api/schools', (req, res) => {
 // Public school catalog (limited fields) for migration destination selection
 app.get('/api/schools/catalog', (req, res) => {
   const role = req.user?.role
-  if (!(role === 'Coach' || role === 'SchoolAdmin' || role === 'ZoneCoordinator' || role === 'EPHSRUAdmin')) {
+  // Players need the directory to pick a transfer destination; it exposes school names only
+  if (!(role === 'Coach' || role === 'SchoolAdmin' || role === 'ZoneCoordinator' || role === 'EPHSRUAdmin' || role === 'Player')) {
     return res.status(403).json({ error: 'forbidden' })
   }
   db.all('SELECT schoolId, zoneId, data, ts FROM schools ORDER BY ts DESC', [], (err, rows) => {
@@ -669,6 +734,8 @@ app.post('/api/players/register', (req, res) => {
     if (!body.initialZoneId) body.initialZoneId = body.zoneId || ''
     body.currentSchoolId = body.schoolId || ''
     body.currentZoneId = body.zoneId || ''
+    // Self-registrations enter the coach's review queue; staff-created players are trusted
+    if (!body.status && (!req.user?.role || req.user.role === 'Player')) body.status = 'pending'
 
     const data = JSON.stringify(body)
     db.run(
@@ -1049,6 +1116,15 @@ app.post('/api/migration-requests/:id/decision', (req, res) => {
         function(uerr) {
           if (uerr) return res.status(500).json({ error: uerr.message })
           writeAudit(role, 'migration_requests', 'decision', { id: mr.id, status: 'pending' }, { id: mr.id, status: decision, decidedAt: now })
+          const transferMsg = decision === 'accepted'
+            ? `The transfer request to ${mr.toSchoolId} has been accepted. The player record has moved to the new school.`
+            : `The transfer request to ${mr.toSchoolId} was rejected.${decisionReason ? ` Reason: ${decisionReason}` : ''}`
+          if (mr.requesterEmail) queueNotification(mr.requesterEmail, `School transfer ${decision}`, transferMsg)
+          db.get('SELECT email FROM players WHERE id = ?', [mr.playerId], (nerr, p) => {
+            if (!nerr && p?.email && String(p.email).toLowerCase() !== String(mr.requesterEmail || '').toLowerCase()) {
+              queueNotification(p.email, `School transfer ${decision}`, transferMsg)
+            }
+          })
           res.json({ ok: true, id: mr.id, status: decision, ...extra })
         }
       )
@@ -1097,7 +1173,6 @@ app.post('/api/migration-requests/:id/decision', (req, res) => {
 })
 
 app.get('/api/players', (req, res) => {
-  try { console.time('GET /api/players') } catch {}
   let query = 'SELECT * FROM players'
   const params = []
   const conditions = []
@@ -1127,13 +1202,11 @@ app.get('/api/players', (req, res) => {
       }
     })
     if (!missing.length) {
-      try { console.timeEnd('GET /api/players') } catch {}
       return res.json(out)
     }
 
     db.all("SELECT ts, after FROM audits WHERE entity = 'players' AND action = 'create'", [], (aerr, arows) => {
       if (aerr) {
-        try { console.timeEnd('GET /api/players') } catch {}
         return res.json(out)
       }
       const createdTsById = new Map()
@@ -1160,7 +1233,6 @@ app.get('/api/players', (req, res) => {
           db.run('UPDATE players SET data = ? WHERE id = ?', [JSON.stringify(nextData), r.id])
         } catch {}
       }
-      try { console.timeEnd('GET /api/players') } catch {}
       res.json(out)
     })
   })
@@ -1177,7 +1249,6 @@ app.get('/api/players/:id', (req, res) => {
 })
 
 app.put('/api/players/:id', (req, res) => {
-  try { console.time('PUT /api/players/:id') } catch {}
   db.get('SELECT * FROM players WHERE id = ?', [req.params.id], (err, row) => {
     if (err) return res.status(500).json({ error: err.message })
     if (!row) return res.status(404).json({ error: 'not_found' })
@@ -1198,8 +1269,6 @@ app.put('/api/players/:id', (req, res) => {
     } else {
       if (!withinScope('players', req.user, req.body)) return res.status(403).json({ error: 'scope' })
     }
-    try { console.log('PUT /api/players/:id', { id: req.params.id, role: req.user?.role, zoneId: req.user?.zoneId, schoolId: req.user?.schoolId, body: req.body }) } catch {}
-    
     const existingData = JSON.parse(row.data || '{}')
     const updatedData = { ...existingData, ...req.body }
     const ts = Date.now()
@@ -1224,7 +1293,6 @@ app.put('/api/players/:id', (req, res) => {
       function(err) {
         if (err) return res.status(500).json({ error: err.message })
         db.get('SELECT * FROM players WHERE id = ?', [req.params.id], (err2, updated) => {
-          try { console.timeEnd('PUT /api/players/:id') } catch {}
           if (err2 || !updated) return res.json({ ...row, ...req.body, ts })
           writeAudit(req.user?.role, 'players', 'update', row, updated)
           res.json(updated)
@@ -1263,6 +1331,19 @@ app.post('/api/coaches', (req, res) => {
     }
   )
   }
+})
+
+app.delete('/api/coaches/:id', (req, res) => {
+  db.get('SELECT * FROM coaches WHERE id = ?', [req.params.id], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message })
+    if (!row) return res.status(404).json({ error: 'not_found' })
+    if (!allowUpdate('coaches', req.user?.role, req.user, row)) return res.status(403).json({ error: 'forbidden' })
+    db.run('DELETE FROM coaches WHERE id = ?', [req.params.id], function(derr) {
+      if (derr) return res.status(500).json({ error: derr.message })
+      writeAudit(req.user?.role, 'coaches', 'delete', row, null)
+      res.json({ ok: true, id: req.params.id })
+    })
+  })
 })
 
 app.get('/api/coaches', (req, res) => {
@@ -1329,7 +1410,8 @@ app.put('/api/coaches/:id', (req, res) => {
 // Referees endpoints
 app.post('/api/referees', (req, res) => {
   if (!allowPost('referees', req.user?.role)) return res.status(403).json({ error: 'forbidden' })
-  
+  if (!withinScope('referees', req.user, req.body)) return res.status(403).json({ error: 'scope' })
+
   const id = crypto.randomUUID()
   const ts = Date.now()
   const data = JSON.stringify(req.body)
@@ -1387,7 +1469,8 @@ app.put('/api/referees/:id', (req, res) => {
 // Admins endpoints
 app.post('/api/admins', (req, res) => {
   if (!allowPost('admins', req.user?.role)) return res.status(403).json({ error: 'forbidden' })
-  
+  if (req.user?.role === 'ZoneCoordinator' && !withinScope('admins', req.user, req.body)) return res.status(403).json({ error: 'scope' })
+
   const id = crypto.randomUUID()
   const ts = Date.now()
   const data = JSON.stringify(req.body)
@@ -1478,55 +1561,204 @@ app.get('/api/audits', (req, res) => {
 })
 
 // Login endpoint
-app.post('/api/login', (req, res) => {
-  const { role, zoneId, schoolId, email } = req.body || {}
-  if (!role) return res.status(400).json({ error: 'role required' })
-  const token = sign({ role, zoneId, schoolId, email })
-  res.json({ token })
-})
-
-app.get('/api/identify', (req, res) => {
-  const email = String(req.query.email || '').trim()
-  const emailL = email.toLowerCase()
-  const password = String(req.query.password || '')
-  if (!email) return res.status(400).json({ error: 'email required' })
-  function checkPassword(row, role, extra = {}) {
-    try {
-      const data = JSON.parse(row.data || '{}')
-      const hash = data.passwordHash || ''
-      if (hash && password && !bcrypt.compareSync(password, hash)) return null
-    } catch {}
-    return { role, ...extra }
-  }
-  db.get('SELECT role, zoneId, schoolId, data FROM admins WHERE LOWER(email) = ?', [emailL], (errAdmin, admin) => {
-    if (errAdmin) return res.status(500).json({ error: errAdmin.message })
-    if (admin) {
-      const out = checkPassword(admin, admin.role || 'EPHSRUAdmin', { zoneId: admin.zoneId || '', schoolId: admin.schoolId || '' })
-      if (out) return res.json(out)
-    }
-    db.get('SELECT zoneId, schoolId, data FROM coaches WHERE LOWER(email) = ?', [emailL], (err2, coach) => {
-      if (err2) return res.status(500).json({ error: err2.message })
-      if (coach) {
-        const out = checkPassword(coach, 'Coach', { zoneId: coach.zoneId || '', schoolId: coach.schoolId || '' })
-        if (out) return res.json(out)
-      }
-      db.get('SELECT zoneId, schoolId, data FROM players WHERE LOWER(email) = ?', [emailL], (err, player) => {
-        if (err) return res.status(500).json({ error: err.message })
-        if (player) {
-          const out = checkPassword(player, 'Player', { zoneId: player.zoneId || '', schoolId: player.schoolId || '' })
-          if (out) return res.json(out)
-        }
-        db.get('SELECT id, data FROM referees WHERE LOWER(email) = ?', [emailL], (err4, ref) => {
-          if (err4) return res.status(500).json({ error: err4.message })
-          if (ref) {
-            const out = checkPassword(ref, 'Referee')
-            if (out) return res.json(out)
-          }
-          res.status(404).json({ error: 'not_found' })
+function lookupUserByEmail(email) {
+  const e = String(email || '').trim().toLowerCase()
+  if (!e) return Promise.resolve(null)
+  const parseHash = (row) => { try { return JSON.parse(row.data || '{}').passwordHash || '' } catch { return '' } }
+  return new Promise((resolve) => {
+    db.get('SELECT role, zoneId, schoolId, name, surname, data FROM admins WHERE LOWER(email) = ? LIMIT 1', [e], (err, a) => {
+      if (!err && a) return resolve({ role: a.role || 'EPHSRUAdmin', zoneId: a.zoneId || '', schoolId: a.schoolId || '', name: a.name || '', surname: a.surname || '', passwordHash: parseHash(a) })
+      db.get('SELECT zoneId, schoolId, name, surname, data FROM coaches WHERE LOWER(email) = ? LIMIT 1', [e], (err2, c) => {
+        if (!err2 && c) return resolve({ role: 'Coach', zoneId: c.zoneId || '', schoolId: c.schoolId || '', name: c.name || '', surname: c.surname || '', passwordHash: parseHash(c) })
+        db.get('SELECT zoneId, schoolId, name, surname, data FROM players WHERE LOWER(email) = ? LIMIT 1', [e], (err3, p) => {
+          if (!err3 && p) return resolve({ role: 'Player', zoneId: p.zoneId || '', schoolId: p.schoolId || '', name: p.name || '', surname: p.surname || '', passwordHash: parseHash(p) })
+          db.get('SELECT zoneId, name, surname, data FROM referees WHERE LOWER(email) = ? LIMIT 1', [e], (err4, r) => {
+            if (!err4 && r) return resolve({ role: 'Referee', zoneId: r.zoneId || '', schoolId: '', name: r.name || '', surname: r.surname || '', passwordHash: parseHash(r) })
+            resolve(null)
+          })
         })
       })
     })
   })
+}
+
+const SELF_REGISTRATION_ROLES = new Set(['Player', 'Coach', 'Referee', 'SchoolAdmin'])
+
+// Legacy role-claim endpoint. In production it only issues anonymous registration-grade
+// tokens for self-registration roles; any identified login must go through
+// /api/auth/login (password) or /api/auth/oauth — never an unverified role claim.
+app.post('/api/login', (req, res) => {
+  const env = process.env.NODE_ENV || 'development'
+  const { role, zoneId, schoolId, email } = req.body || {}
+  if (!role) return res.status(400).json({ error: 'role required' })
+  const e = String(email || '').trim().toLowerCase()
+  if (!e) {
+    if (env === 'production' && !SELF_REGISTRATION_ROLES.has(String(role))) {
+      return res.status(403).json({ error: 'credentials_required' })
+    }
+    return res.json({ token: sign({ role, zoneId, schoolId }) })
+  }
+  if (env === 'production') {
+    // Knowing an email must never be enough to mint that user's token
+    return res.status(403).json({ error: 'use_auth_login' })
+  }
+  lookupUserByEmail(e).then((found) => {
+    if (found && found.role && found.role !== role) {
+      return res.status(403).json({ error: 'role_mismatch', role: found.role })
+    }
+    const z = found && found.zoneId ? found.zoneId : zoneId
+    const s = found && found.schoolId ? found.schoolId : schoolId
+    res.json({ token: sign({ role, zoneId: z, schoolId: s, email: e }) })
+  })
+})
+
+// Credential login: verifies the password server-side and issues the token in one step,
+// so the browser never has to claim a role and passwords never appear in URLs.
+app.post('/api/auth/login', async (req, res) => {
+  const env = process.env.NODE_ENV || 'development'
+  const email = String(req.body?.email || '').trim().toLowerCase()
+  const password = String(req.body?.password || '')
+  if (!email || !password) return res.status(400).json({ error: 'email_and_password_required' })
+  const user = await lookupUserByEmail(email)
+  if (!user) return res.status(404).json({ error: 'not_found' })
+  if (user.passwordHash) {
+    if (!bcrypt.compareSync(password, user.passwordHash)) {
+      return res.status(401).json({ error: 'invalid_credentials' })
+    }
+  } else if (env === 'production') {
+    // Accounts created without a password cannot sign in to a public deployment
+    return res.status(403).json({ error: 'password_setup_required' })
+  }
+  const token = sign({ role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, email })
+  res.json({ token, role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, name: user.name, surname: user.surname })
+})
+
+// Social sign-in: the provider proves the user owns the email, then the email must match an
+// already-registered portal account (role and scope always come from our own records).
+app.post('/api/auth/oauth', async (req, res) => {
+  const provider = String(req.body?.provider || '')
+  try {
+    let email = ''
+    let displayName = ''
+    if (provider === 'google') {
+      const credential = String(req.body?.credential || '')
+      if (!credential) return res.status(400).json({ error: 'credential_required' })
+      const r = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`)
+      if (!r.ok) return res.status(401).json({ error: 'invalid_google_token' })
+      const info = await r.json()
+      const expectedAud = process.env.GOOGLE_CLIENT_ID || ''
+      if (expectedAud && info.aud !== expectedAud) return res.status(401).json({ error: 'audience_mismatch' })
+      if (String(info.email_verified) !== 'true') return res.status(401).json({ error: 'email_not_verified' })
+      email = String(info.email || '').trim().toLowerCase()
+      displayName = String(info.name || '')
+    } else if (provider === 'facebook') {
+      const accessToken = String(req.body?.accessToken || '')
+      if (!accessToken) return res.status(400).json({ error: 'access_token_required' })
+      const appId = process.env.FACEBOOK_APP_ID || ''
+      const appSecret = process.env.FACEBOOK_APP_SECRET || ''
+      if (appId && appSecret) {
+        const dbg = await fetch(`https://graph.facebook.com/debug_token?input_token=${encodeURIComponent(accessToken)}&access_token=${encodeURIComponent(`${appId}|${appSecret}`)}`)
+        const dbgBody = dbg.ok ? await dbg.json() : null
+        if (!dbgBody?.data?.is_valid || String(dbgBody?.data?.app_id) !== appId) {
+          return res.status(401).json({ error: 'invalid_facebook_token' })
+        }
+      }
+      const r = await fetch(`https://graph.facebook.com/me?fields=id,name,email&access_token=${encodeURIComponent(accessToken)}`)
+      if (!r.ok) return res.status(401).json({ error: 'invalid_facebook_token' })
+      const info = await r.json()
+      email = String(info.email || '').trim().toLowerCase()
+      displayName = String(info.name || '')
+    } else {
+      return res.status(400).json({ error: 'unsupported_provider' })
+    }
+    if (!email) return res.status(401).json({ error: 'no_email_from_provider' })
+    const user = await lookupUserByEmail(email)
+    if (!user) return res.status(404).json({ error: 'not_registered', email })
+    const token = sign({ role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, email })
+    writeAudit(user.role, 'auth', 'oauth_login', null, { email, provider })
+    res.json({ token, role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, name: user.name || displayName, surname: user.surname })
+  } catch (err) {
+    res.status(502).json({ error: 'oauth_verification_failed' })
+  }
+})
+
+function updatePasswordHash(email, passwordHash) {
+  const e = String(email || '').trim().toLowerCase()
+  const tables = ['admins', 'coaches', 'players', 'referees']
+  return new Promise((resolve) => {
+    const tryTable = (i) => {
+      if (i >= tables.length) return resolve(false)
+      const t = tables[i]
+      db.get(`SELECT id, data FROM ${t} WHERE LOWER(email) = ? LIMIT 1`, [e], (err, row) => {
+        if (err || !row) return tryTable(i + 1)
+        let data = {}
+        try { data = JSON.parse(row.data || '{}') } catch {}
+        data.passwordHash = passwordHash
+        db.run(`UPDATE ${t} SET data = ? WHERE id = ?`, [JSON.stringify(data), row.id], (uerr) => resolve(!uerr))
+      })
+    }
+    tryTable(0)
+  })
+}
+
+// Step 1 of password reset: issue a one-hour token. The response is identical whether or
+// not the email exists, so the endpoint can't be used to probe registrations. Hook an
+// email service where the token is logged; outside production the token is returned
+// directly so the flow works without SMTP.
+app.post('/api/auth/forgot', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase()
+  if (!email) return res.status(400).json({ error: 'email_required' })
+  const user = await lookupUserByEmail(email)
+  const generic = { ok: true, message: 'If this email is registered, a reset link has been sent.' }
+  if (!user) return res.json(generic)
+  const token = crypto.randomUUID()
+  const expiresAt = Date.now() + 60 * 60 * 1000
+  db.run('INSERT INTO password_resets (token, email, expiresAt) VALUES (?, ?, ?)', [token, email, expiresAt], (err) => {
+    if (err) return res.status(500).json({ error: 'reset_failed' })
+    // EMAIL INTEGRATION POINT: send `token` to `email` via your mail provider here
+    console.log(`[password-reset] token for ${email}: ${token} (expires ${new Date(expiresAt).toISOString()})`)
+    queueNotification(email, 'Password reset requested', 'A password reset was requested for your account. If this was not you, contact your school administrator.')
+    if ((process.env.NODE_ENV || 'development') !== 'production') {
+      return res.json({ ...generic, token })
+    }
+    res.json(generic)
+  })
+})
+
+// Step 2: exchange the token for a new password
+app.post('/api/auth/reset', (req, res) => {
+  const token = String(req.body?.token || '').trim()
+  const password = String(req.body?.password || '')
+  if (!token || !password) return res.status(400).json({ error: 'token_and_password_required' })
+  if (password.length < 8) return res.status(400).json({ error: 'password_too_short' })
+  db.get('SELECT email, expiresAt FROM password_resets WHERE token = ?', [token], async (err, row) => {
+    if (err) return res.status(500).json({ error: err.message })
+    if (!row || Number(row.expiresAt) < Date.now()) {
+      return res.status(400).json({ error: 'invalid_or_expired_token' })
+    }
+    const hash = bcrypt.hashSync(password, 10)
+    const ok = await updatePasswordHash(row.email, hash)
+    db.run('DELETE FROM password_resets WHERE token = ?', [token])
+    if (!ok) return res.status(500).json({ error: 'reset_failed' })
+    writeAudit('', 'auth', 'password_reset', null, { email: row.email })
+    res.json({ ok: true })
+  })
+})
+
+app.get('/api/identify', async (req, res) => {
+  const email = String(req.query.email || '').trim()
+  const password = String(req.query.password || '')
+  if (!email) return res.status(400).json({ error: 'email required' })
+  // Passwords must never travel in query strings on a public deployment — use POST /api/auth/login
+  if (password && (process.env.NODE_ENV || 'development') === 'production') {
+    return res.status(400).json({ error: 'use_auth_login' })
+  }
+  const user = await lookupUserByEmail(email)
+  if (!user) return res.status(404).json({ error: 'not_found' })
+  if (user.passwordHash && password && !bcrypt.compareSync(password, user.passwordHash)) {
+    return res.status(404).json({ error: 'not_found' })
+  }
+  res.json({ role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, name: user.name, surname: user.surname })
 })
 
 // File uploads
@@ -1536,11 +1768,24 @@ const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => cb(null, Date.now() + '-' + file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_')),
 })
-const upload = multer({ storage })
+const ALLOWED_UPLOAD_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'application/pdf',
+  'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+])
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => cb(null, ALLOWED_UPLOAD_TYPES.has(file.mimetype)),
+})
 
-app.post('/api/upload', upload.single('file'), (req, res) => {
+app.post('/api/upload', (req, res, next) => {
+  // Uploads require a session — an open upload endpoint is a free file host
+  if (!req.user?.role) return res.status(403).json({ error: 'forbidden' })
+  next()
+}, upload.single('file'), (req, res) => {
   const filename = req.file?.filename
-  if (!filename) return res.status(400).json({ error: 'no file' })
+  if (!filename) return res.status(400).json({ error: 'no file or unsupported type' })
   const url = `/uploads/${filename}`
   res.json({ url })
 })
@@ -1804,6 +2049,8 @@ app.post('/api/players/:id/approve', (req, res) => {
           if (this.changes === 0) return res.status(404).json({ error: 'not_found' })
           
           writeAudit(req.user?.role, 'players', 'approve', row, { ...row, data: updatedData, ts })
+          queueNotification(row.email, 'Registration approved', `Welcome to the squad, ${row.name}! Your player registration has been approved.`)
+          if (row.parentEmail) queueNotification(row.parentEmail, 'Registration approved', `${row.name} ${row.surname}'s player registration has been approved.`)
           res.json({ id: req.params.id, status: 'approved', ts })
         }
       )
@@ -1846,12 +2093,81 @@ app.post('/api/players/:id/reject', (req, res) => {
           if (this.changes === 0) return res.status(404).json({ error: 'not_found' })
           
           writeAudit(req.user?.role, 'players', 'reject', row, { ...row, data: updatedData, ts })
+          queueNotification(row.email, 'Registration not approved', `Your player registration was not approved. Reason: ${updatedData.rejectionReason}. Please contact your school for help.`)
+          if (row.parentEmail) queueNotification(row.parentEmail, 'Registration not approved', `${row.name} ${row.surname}'s registration was not approved. Reason: ${updatedData.rejectionReason}.`)
           res.json({ id: req.params.id, status: 'rejected', reason: req.body.reason, ts })
         }
       )
     } catch {
       return res.status(500).json({ error: 'invalid_data' })
     }
+  })
+})
+
+// Season rollover: re-register last season's squad into the current year, promoting
+// age groups one step per season (U15 -> U16 -> U17 -> U19).
+app.post('/api/players/bulk-reregister', (req, res) => {
+  const role = req.user?.role
+  if (!(role === 'Coach' || role === 'SchoolAdmin' || role === 'EPHSRUAdmin')) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  const { playerIds } = req.body
+  if (!Array.isArray(playerIds) || playerIds.length === 0) {
+    return res.status(400).json({ error: 'playerIds required' })
+  }
+  const currentYear = new Date().getFullYear()
+  const promote = (v, steps) => {
+    let out = String(v || '')
+    for (let i = 0; i < steps; i++) {
+      if (out === 'U15') out = 'U16'
+      else if (out === 'U16') out = 'U17'
+      else if (out === 'U17') out = 'U19'
+    }
+    return out
+  }
+  const results = []
+  let completed = 0
+  const finishOne = () => {
+    completed++
+    if (completed === playerIds.length) {
+      res.json({ results, total: playerIds.length, successful: results.filter((r) => r.success).length, year: currentYear })
+    }
+  }
+  playerIds.forEach((playerId) => {
+    db.get('SELECT * FROM players WHERE id = ?', [playerId], (err, row) => {
+      if (err || !row || !withinScope('players', req.user, row)) {
+        results.push({ id: playerId, success: false, error: err ? err.message : 'not_found_or_forbidden' })
+        return finishOne()
+      }
+      let data = {}
+      try { data = JSON.parse(row.data || '{}') } catch {}
+      const fromYear = Number(data.registrationYear) || currentYear
+      if (fromYear >= currentYear) {
+        results.push({ id: playerId, success: false, error: 'already_current_season' })
+        return finishOne()
+      }
+      const steps = currentYear - fromYear
+      if (data.originalRegistrationYear === undefined) data.originalRegistrationYear = data.registrationYear
+      if (data.originalRegisteredAt === undefined) data.originalRegisteredAt = data.registeredAt
+      const now = Date.now()
+      data.registrationYear = currentYear
+      data.registeredAt = now
+      if (data.ageGroup) data.ageGroup = promote(data.ageGroup, steps)
+      if (data.team) data.team = promote(data.team, steps)
+      db.run(
+        'UPDATE players SET ageGroup = ?, data = ?, ts = ? WHERE id = ?',
+        [data.ageGroup || row.ageGroup, JSON.stringify(data), now, playerId],
+        function(uerr) {
+          if (uerr) {
+            results.push({ id: playerId, success: false, error: uerr.message })
+          } else {
+            results.push({ id: playerId, success: true, year: currentYear, ageGroup: data.ageGroup || row.ageGroup })
+            writeAudit(role, 'players', 'reregister', row, { id: playerId, registrationYear: currentYear, ageGroup: data.ageGroup })
+          }
+          finishOne()
+        }
+      )
+    })
   })
 })
 
@@ -1894,6 +2210,7 @@ app.post('/api/players/bulk-approve', (req, res) => {
             } else {
               results.push({ id: playerId, success: true, status: 'approved' })
               writeAudit(req.user?.role, 'players', 'bulk_approve', row, { ...row, data: updatedData, ts })
+              queueNotification(row.email, 'Registration approved', `Welcome to the squad, ${row.name}! Your player registration has been approved.`)
             }
             completed++
             if (completed === playerIds.length) {
@@ -1930,11 +2247,42 @@ app.post('/api/documents', (req, res) => {
   )
 })
 
+// Resolve which school/zone/person a document belongs to so access can be scoped.
+// Legacy rows with unresolvable owners stay visible to EPHSRU admins only.
+function resolveDocOwner(ownerType, ownerId, cb) {
+  const t = String(ownerType || '').toLowerCase()
+  const id = String(ownerId || '')
+  if (!id) return cb(null)
+  if (t.startsWith('school')) {
+    return db.get('SELECT zoneId, schoolId FROM schools WHERE id = ? OR schoolId = ? LIMIT 1', [id, id], (err, r) => {
+      cb(!err && r ? { zoneId: String(r.zoneId || ''), schoolId: String(r.schoolId || ''), email: '' } : null)
+    })
+  }
+  const table = t.startsWith('player') ? 'players' : t.startsWith('coach') ? 'coaches' : t.startsWith('referee') ? 'referees' : null
+  if (!table) return cb(null)
+  const cols = table === 'referees' ? 'zoneId, email' : 'zoneId, schoolId, email'
+  db.get(`SELECT ${cols} FROM ${table} WHERE id = ? LIMIT 1`, [id], (err, r) => {
+    if (err || !r) return cb(null)
+    cb({ zoneId: String(r.zoneId || ''), schoolId: String(r.schoolId || ''), email: String(r.email || '').toLowerCase() })
+  })
+}
+
+function canAccessDoc(user, owner) {
+  const role = user?.role
+  if (role === 'EPHSRUAdmin') return true
+  if (!owner) return false
+  if (role === 'ZoneCoordinator') return owner.zoneId === String(user.zoneId || '')
+  if (role === 'SchoolAdmin' || role === 'Coach') return owner.schoolId === String(user.schoolId || '')
+  if (role === 'Player' || role === 'Referee') return !!owner.email && owner.email === String(user.email || '').toLowerCase()
+  return false
+}
+
 app.get('/api/documents', (req, res) => {
+  if (!req.user?.role) return res.status(403).json({ error: 'forbidden' })
   let query = 'SELECT * FROM documents'
   const params = []
   const conditions = []
-  
+
   if (req.query.ownerType) {
     conditions.push('ownerType = ?')
     params.push(req.query.ownerType)
@@ -1947,37 +2295,92 @@ app.get('/api/documents', (req, res) => {
     conditions.push('status = ?')
     params.push(req.query.status)
   }
-  
+
   if (conditions.length > 0) {
     query += ' WHERE ' + conditions.join(' AND ')
   }
-  
+
   db.all(query, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message })
-    res.json(rows)
+    const list = rows || []
+    if (req.user.role === 'EPHSRUAdmin' || list.length === 0) return res.json(list)
+    const out = []
+    let done = 0
+    list.forEach((doc) => {
+      resolveDocOwner(doc.ownerType, doc.ownerId, (owner) => {
+        if (canAccessDoc(req.user, owner)) out.push(doc)
+        done++
+        if (done === list.length) {
+          out.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))
+          res.json(out)
+        }
+      })
+    })
   })
 })
 
-app.post('/api/documents/:id/approve', (req, res) => {
+function decideDocument(req, res, status) {
   const role = req.user?.role
-  if (!(role === 'SchoolAdmin' || role === 'EPHSRUAdmin')) return res.status(403).json({ error: 'forbidden' })
-  
-  db.run('UPDATE documents SET status = ? WHERE id = ?', ['approved', req.params.id], function(err) {
+  if (!(role === 'SchoolAdmin' || role === 'ZoneCoordinator' || role === 'EPHSRUAdmin')) return res.status(403).json({ error: 'forbidden' })
+  db.get('SELECT * FROM documents WHERE id = ?', [req.params.id], (gerr, doc) => {
+    if (gerr) return res.status(500).json({ error: gerr.message })
+    if (!doc) return res.status(404).json({ error: 'not_found' })
+    resolveDocOwner(doc.ownerType, doc.ownerId, (owner) => {
+      if (!canAccessDoc(req.user, owner)) return res.status(403).json({ error: 'scope' })
+      db.run('UPDATE documents SET status = ? WHERE id = ?', [status, req.params.id], function(err) {
+        if (err) return res.status(500).json({ error: err.message })
+        if (this.changes === 0) return res.status(404).json({ error: 'not_found' })
+        writeAudit(role, 'documents', status, doc, { ...doc, status })
+        if (owner?.email) queueNotification(owner.email, `Document ${status}`, `Your document "${doc.fileName || doc.id}" has been ${status}.`)
+        res.json({ id: req.params.id, status })
+      })
+    })
+  })
+}
+
+app.post('/api/documents/:id/approve', (req, res) => decideDocument(req, res, 'approved'))
+
+app.post('/api/documents/:id/reject', (req, res) => decideDocument(req, res, 'rejected'))
+
+// In-app notification inbox (own email only)
+app.get('/api/notifications', (req, res) => {
+  const email = String(req.user?.email || '').trim().toLowerCase()
+  if (!req.user?.role || !email) return res.status(403).json({ error: 'forbidden' })
+  db.all('SELECT * FROM notifications WHERE email = ? ORDER BY createdAt DESC LIMIT 50', [email], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message })
-    if (this.changes === 0) return res.status(404).json({ error: 'not_found' })
-    res.json({ id: req.params.id, status: 'approved' })
+    res.json(rows || [])
   })
 })
 
-app.post('/api/documents/:id/reject', (req, res) => {
-  const role = req.user?.role
-  if (!(role === 'SchoolAdmin' || role === 'EPHSRUAdmin')) return res.status(403).json({ error: 'forbidden' })
-  
-  db.run('UPDATE documents SET status = ? WHERE id = ?', ['rejected', req.params.id], function(err) {
+app.post('/api/notifications/read-all', (req, res) => {
+  const email = String(req.user?.email || '').trim().toLowerCase()
+  if (!req.user?.role || !email) return res.status(403).json({ error: 'forbidden' })
+  db.run('UPDATE notifications SET readAt = ? WHERE email = ? AND readAt IS NULL', [Date.now(), email], function(err) {
     if (err) return res.status(500).json({ error: err.message })
-    if (this.changes === 0) return res.status(404).json({ error: 'not_found' })
-    res.json({ id: req.params.id, status: 'rejected' })
+    res.json({ ok: true, marked: this.changes })
   })
+})
+
+// In production the API server also serves the built frontend (single deployable unit)
+const distDir = path.join(process.cwd(), 'dist')
+if ((process.env.NODE_ENV || 'development') === 'production' && fs.existsSync(distDir)) {
+  app.use(express.static(distDir))
+  app.get(/^(?!\/(api|uploads)\/).*/, (_req, res) => {
+    res.sendFile(path.join(distDir, 'index.html'))
+  })
+}
+
+// Global error handler: malformed JSON, multer limits, and unexpected throws
+// answer with JSON instead of an HTML stack trace
+app.use((err, _req, res, _next) => {
+  if (err?.type === 'entity.parse.failed' || err?.type === 'entity.too.large') {
+    return res.status(400).json({ error: 'bad_request' })
+  }
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'file_too_large', maxBytes: 5 * 1024 * 1024 })
+  }
+  console.error('[unhandled]', err?.message || err)
+  res.status(500).json({ error: 'internal_error' })
 })
 
 const port = process.env.PORT || 4000

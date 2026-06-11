@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { 
   Users, UserCheck, School, MapPin, Calendar, Award, 
   TrendingUp, AlertCircle, ChevronDown, ChevronUp,
@@ -8,10 +8,17 @@ import {
   List as ListIcon, LayoutGrid, Folder, ChevronLeft,
   CheckCircle, XCircle
 } from 'lucide-react'
-import { fetchList, postJson, putJson } from '../../utils/api'
-import { login } from '../../utils/auth'
+import { fetchList, postJson, putJson, deleteJson } from '../../utils/api'
+import { ensureSession } from '../../utils/auth'
+import { notifyError, notifySuccess } from '../../utils/notify'
+import { API_ORIGIN, apiUrl } from '../../utils/apiBase'
+import { zoneNameOf } from '../../utils/labels'
+import { resizeImage } from '../../utils/image'
+import bcrypt from 'bcryptjs'
 import PlayerCard from '../PlayerCard'
 import SchoolCard from '../SchoolCard'
+import CoachCard, { CoachAvatar } from '../CoachCard'
+import ExportMenu from '../ExportMenu'
 import PlayerProfileModal from '../modals/PlayerProfileModal'
 
 interface SchoolAdminDashboardProps {
@@ -40,7 +47,6 @@ export default function SchoolAdminDashboard({
   const [searchQuery, setSearchQuery] = useState('')
   const [showAddCoach, setShowAddCoach] = useState(false)
   const [editingCoach, setEditingCoach] = useState<string | null>(null)
-  const [showAddAdmin, setShowAddAdmin] = useState(false)
   const [expandedStats, setExpandedStats] = useState(true)
   const [resultsView, setResultsView] = useState<'cards' | 'list'>(() => {
     try {
@@ -140,22 +146,49 @@ export default function SchoolAdminDashboard({
   }, [players])
 
   // Quick actions for coaches
-  const [coachForm, setCoachForm] = useState({
-    name: '', surname: '', email: '', phone: '', idNumber: '', team: ''
-  })
+  const EMPTY_COACH_FORM = { name: '', surname: '', email: '', phone: '', idNumber: '', team: '', photoUrl: '', qualifications: '', experience: '', password: '' }
+  const [coachForm, setCoachForm] = useState(EMPTY_COACH_FORM)
+  const [coachSearch, setCoachSearch] = useState('')
+  const COACH_PAGE_SIZE = 10
+  const [visibleCoachCount, setVisibleCoachCount] = useState(COACH_PAGE_SIZE)
+  const coachFormRef = useRef<HTMLDivElement | null>(null)
+
+  // The edit form sits above the list; bring it into view when opened from a row far down
+  useEffect(() => {
+    if (showAddCoach) {
+      setTimeout(() => coachFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50)
+    }
+  }, [showAddCoach, editingCoach])
+
+  // Newest first so recently added coaches are immediately visible; searchable and paginated
+  const coachesSorted = useMemo(() => {
+    const q = coachSearch.trim().toLowerCase()
+    let list = [...coaches].sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0))
+    if (q) {
+      list = list.filter((c) => {
+        const d = c.data || {}
+        return [d.name, d.surname, d.email, c.email, d.team].some((v) => String(v || '').toLowerCase().includes(q))
+      })
+    }
+    return list
+  }, [coaches, coachSearch])
+  useEffect(() => { setVisibleCoachCount(COACH_PAGE_SIZE) }, [coachSearch])
 
   const handleAddCoach = async () => {
     if (!school || !zone) return
-    await login('SchoolAdmin', zone, school)
-    
+    await ensureSession()
+    const { password, ...coachFields } = coachForm
+    const credentials = password ? { passwordHash: bcrypt.hashSync(password, 10) } : {}
+
     if (editingCoach) {
       // Update existing coach
       const existing = coaches.find(c => c.id === editingCoach)
       if (!existing) return
-      
+
       const payload = {
         ...existing.data,
-        ...coachForm,
+        ...coachFields,
+        ...credentials,
         schoolId: school,
         zoneId: zone,
         role: 'Coach'
@@ -164,13 +197,16 @@ export default function SchoolAdminDashboard({
       if (res) {
         setShowAddCoach(false)
         setEditingCoach(null)
-        setCoachForm({ name: '', surname: '', email: '', phone: '', idNumber: '', team: '' })
+        setCoachForm(EMPTY_COACH_FORM)
         onRefresh()
+      } else {
+        notifyError('Could not update coach. Please check the details and try again.')
       }
     } else {
       // Create new coach
       const payload = {
-        ...coachForm,
+        ...coachFields,
+        ...credentials,
         schoolId: school,
         zoneId: zone,
         role: 'Coach'
@@ -178,9 +214,24 @@ export default function SchoolAdminDashboard({
       const res = await postJson('coaches', payload)
       if (res) {
         setShowAddCoach(false)
-        setCoachForm({ name: '', surname: '', email: '', phone: '', idNumber: '', team: '' })
+        setCoachForm(EMPTY_COACH_FORM)
         onRefresh()
+      } else {
+        notifyError('Could not add coach. Please check the details and try again.')
       }
+    }
+  }
+
+  const handleDeleteCoach = async (coach: any) => {
+    const label = `${coach.data?.name || ''} ${coach.data?.surname || ''}`.trim() || 'this coach'
+    if (!confirm(`Remove ${label} from your school? This cannot be undone.`)) return
+    await ensureSession()
+    const ok = await deleteJson('coaches', coach.id)
+    if (ok) {
+      notifySuccess(`${label} removed`)
+      onRefresh()
+    } else {
+      notifyError('Could not remove the coach. Please try again.')
     }
   }
 
@@ -191,31 +242,76 @@ export default function SchoolAdminDashboard({
       email: coach.data?.email || coach.email || '',
       phone: coach.data?.phone || coach.data?.contactNumber || '',
       idNumber: coach.data?.idNumber || '',
-      team: coach.data?.team || ''
+      team: coach.data?.team || '',
+      photoUrl: coach.data?.photoUrl || '',
+      qualifications: coach.data?.qualifications || coach.qualifications || '',
+      experience: coach.data?.experience || coach.experience || '',
+      password: ''
     })
     setEditingCoach(coach.id)
     setShowAddCoach(true)
   }
 
-  // Quick actions for admins
-  const [adminForm, setAdminForm] = useState({
-    name: '', surname: '', email: '', phone: '', idNumber: ''
-  })
+  // School record (for the emblem/logo)
+  const [schoolRow, setSchoolRow] = useState<any | null>(null)
+  const loadSchoolRow = async () => {
+    if (!school) return
+    const rows = await fetchList('schools', { schoolId: school, zoneId: zone })
+    setSchoolRow(Array.isArray(rows) && rows.length ? rows[0] : null)
+  }
+  useEffect(() => { loadSchoolRow() }, [school, zone])
+  const schoolLogo = (() => {
+    const u = String(schoolRow?.data?.logoUrl || '')
+    return u.startsWith('/uploads') ? `${API_ORIGIN}${u}` : u
+  })()
 
-  const handleAddAdmin = async () => {
-    if (!school || !zone) return
-    await login('SchoolAdmin', zone, school)
-    const payload = {
-      ...adminForm,
-      schoolId: school,
-      zoneId: zone,
-      role: 'SchoolAdmin'
+  const handleLogoUpload = async (raw: File | undefined) => {
+    if (!raw || !schoolRow?.id) return
+    const file = await resizeImage(raw, 256)
+    const fd = new FormData()
+    fd.append('file', file)
+    try {
+      await ensureSession()
+      const t = localStorage.getItem('auth:token') || ''
+      const res = await fetch(apiUrl('/upload'), { method: 'POST', headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: fd })
+      if (!res.ok) return notifyError('Logo upload failed. Please try again.')
+      const data = await res.json()
+      const ok = await putJson('schools', schoolRow.id, { logoUrl: String(data.url || ''), schoolId: school, zoneId: zone })
+      if (ok) {
+        notifySuccess('School emblem updated')
+        await loadSchoolRow()
+      } else {
+        notifyError('Could not save the school emblem.')
+      }
+    } catch {
+      notifyError('Logo upload failed. Please try again.')
     }
-    const res = await postJson('admins', payload)
-    if (res) {
-      setShowAddAdmin(false)
-      setAdminForm({ name: '', surname: '', email: '', phone: '', idNumber: '' })
-      onRefresh()
+  }
+
+  // Approve / reject pending registrations from the Requests tab
+  const decideRequest = async (player: any, decision: 'approve' | 'reject') => {
+    await ensureSession()
+    const t = localStorage.getItem('auth:token') || ''
+    let body: any = {}
+    if (decision === 'reject') {
+      const reason = prompt(`Reason for rejecting ${player.data?.name || 'this player'} (optional):`)
+      if (reason === null) return // cancelled
+      body = { reason: reason || 'Rejected by school admin' }
+    }
+    try {
+      const res = await fetch(apiUrl(`/players/${player.id}/${decision}`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+        body: JSON.stringify(body),
+      })
+      if (res.ok) {
+        notifySuccess(`${player.data?.name || 'Player'} ${player.data?.surname || ''} ${decision === 'approve' ? 'approved' : 'rejected'}`.trim())
+        onRefresh()
+      } else {
+        notifyError(`Could not ${decision} the registration. Please try again.`)
+      }
+    } catch {
+      notifyError(`Could not ${decision} the registration. Please try again.`)
     }
   }
 
@@ -230,7 +326,11 @@ export default function SchoolAdminDashboard({
       overrideDate: Date.now()
     }
     
-    await putJson('players', player.id, updatedData)
+    const res = await putJson('players', player.id, updatedData)
+    if (!res) {
+      notifyError('Could not override the rejection. Please try again.')
+      return
+    }
     onRefresh()
   }
 
@@ -241,19 +341,41 @@ export default function SchoolAdminDashboard({
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4xIj48Y2lyY2xlIGN4PSIzMCIgY3k9IjMwIiByPSIyIi8+PC9nPjwvZz48L3N2Zz4=')] opacity-30"></div>
         <div className="relative px-8 py-8">
           <div className="flex items-start justify-between">
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <School className="h-8 w-8 text-blue-100" />
-                <span className="text-blue-100 text-sm font-medium uppercase tracking-wider">School Administration</span>
+            <div className="flex items-center gap-6">
+              <div className="group relative shrink-0">
+                {schoolLogo ? (
+                  <img
+                    src={schoolLogo}
+                    alt="School emblem"
+                    className="h-24 w-24 rounded-xl bg-white object-contain p-1 ring-4 ring-white/20 shadow-sm"
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                  />
+                ) : (
+                  <div className="flex h-24 w-24 items-center justify-center rounded-xl bg-white/10 ring-4 ring-white/20">
+                    <School className="h-10 w-10 text-blue-100" />
+                  </div>
+                )}
+                <label className="absolute inset-x-0 -bottom-2 mx-auto w-fit cursor-pointer rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-semibold text-blue-900 shadow opacity-0 transition group-hover:opacity-100">
+                  {schoolLogo ? 'Change emblem' : 'Add emblem'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => handleLogoUpload(e.target.files?.[0])}
+                  />
+                </label>
               </div>
-              <h1 className="text-3xl font-bold mb-2">{schoolNameTop || 'School Dashboard'}</h1>
-              <div className="flex items-center gap-4 text-blue-100">
-                <span className="flex items-center gap-1">
-                  <MapPin className="h-4 w-4" />
-                  {zone || 'No Zone Assigned'}
-                </span>
-                <span>•</span>
-                <span>School ID: {school || '—'}</span>
+              <div>
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="text-blue-100 text-sm font-medium uppercase tracking-wider">School Administration</span>
+                </div>
+                <h1 className="text-3xl font-bold mb-2">{schoolNameTop || 'School Dashboard'}</h1>
+                <div className="flex items-center gap-4 text-blue-100">
+                  <span className="flex items-center gap-1">
+                    <MapPin className="h-4 w-4" />
+                    {zoneNameOf(zone) || 'No Zone Assigned'}
+                  </span>
+                </div>
               </div>
             </div>
             <div className="text-right">
@@ -489,11 +611,13 @@ export default function SchoolAdminDashboard({
               </div>
 
               <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-                <button className="flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-gray-50 transition-colors text-gray-700">
-                  <Download className="h-4 w-4" />
-                  <span className="hidden sm:inline">Export</span>
-                </button>
-                
+                <ExportMenu
+                  players={filteredPlayers}
+                  schoolName={schoolNameTop || schoolRow?.data?.name}
+                  logoUrl={schoolRow?.data?.logoUrl}
+                  label="Export"
+                />
+
                 {(selectedTeam || searchQuery) && (
                   <div className="inline-flex overflow-hidden rounded-lg border bg-gray-50 p-1" role="group" aria-label="Player view">
                     <button
@@ -573,18 +697,16 @@ export default function SchoolAdminDashboard({
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                               {coachesInTeam.map(coach => (
                                 <div key={coach.id} className="flex items-center gap-3 p-3 bg-purple-50 rounded-lg border border-purple-100">
-                                  <div className="h-8 w-8 rounded-full bg-purple-200 flex items-center justify-center text-purple-700 font-bold text-xs">
-                                    {(coach.data?.name?.[0] || '')}{(coach.data?.surname?.[0] || '')}
-                                  </div>
+                                  <CoachAvatar coach={coach} size="sm" />
                                   <div className="overflow-hidden">
                                     <div className="font-medium text-sm text-gray-900 truncate">
                                       {coach.data?.name} {coach.data?.surname}
                                     </div>
                                     <div className="text-xs text-gray-500 truncate">
-                                      {coach.data?.email}
+                                      {coach.data?.position || coach.data?.email}
                                     </div>
                                   </div>
-                                  <button 
+                                  <button
                                     onClick={() => { setActiveTab('coaches'); startEditCoach(coach); }}
                                     className="ml-auto p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-100 rounded-md"
                                   >
@@ -747,7 +869,7 @@ export default function SchoolAdminDashboard({
               <button 
                 onClick={() => {
                   setEditingCoach(null)
-                  setCoachForm({ name: '', surname: '', email: '', phone: '', idNumber: '', team: '' })
+                  setCoachForm(EMPTY_COACH_FORM)
                   setShowAddCoach(true)
                 }}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -758,7 +880,7 @@ export default function SchoolAdminDashboard({
             </div>
 
             {showAddCoach && (
-              <div className="rounded-xl border bg-white p-6 shadow-sm">
+              <div ref={coachFormRef} className="rounded-xl border bg-white p-6 shadow-sm">
                 <h4 className="font-medium mb-4">{editingCoach ? 'Edit Coach' : 'Add New Coach'}</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                   <input
@@ -802,6 +924,60 @@ export default function SchoolAdminDashboard({
                       <option key={t} value={t}>{t}</option>
                     ))}
                   </select>
+                  <input
+                    placeholder="Qualification (e.g. Level 1)"
+                    value={coachForm.qualifications}
+                    onChange={(e) => setCoachForm({...coachForm, qualifications: e.target.value})}
+                    className="px-4 py-2 border rounded-lg"
+                  />
+                  <input
+                    placeholder="Years of experience"
+                    type="number"
+                    min={0}
+                    value={coachForm.experience}
+                    onChange={(e) => setCoachForm({...coachForm, experience: e.target.value})}
+                    className="px-4 py-2 border rounded-lg"
+                  />
+                  <input
+                    placeholder={editingCoach ? 'New login password (optional)' : 'Initial login password (optional)'}
+                    type="password"
+                    autoComplete="new-password"
+                    value={coachForm.password}
+                    onChange={(e) => setCoachForm({...coachForm, password: e.target.value})}
+                    className="px-4 py-2 border rounded-lg sm:col-span-2"
+                  />
+                  <label className="flex items-center gap-3 sm:col-span-2">
+                    {coachForm.photoUrl ? (
+                      <img
+                        src={coachForm.photoUrl.startsWith('/uploads') ? `${API_ORIGIN}${coachForm.photoUrl}` : coachForm.photoUrl}
+                        alt="Coach"
+                        className="h-12 w-12 rounded-full object-cover ring-2 ring-purple-200"
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+                      />
+                    ) : (
+                      <span className="text-sm text-gray-500">Photo:</span>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="flex-1 px-4 py-2 border rounded-lg text-sm"
+                      onChange={async (e) => {
+                        const raw = e.target.files?.[0]
+                        if (!raw) return
+                        const file = await resizeImage(raw)
+                        const fd = new FormData()
+                        fd.append('file', file)
+                        try {
+                          const t = localStorage.getItem('auth:token') || ''
+                          const res = await fetch(apiUrl('/upload'), { method: 'POST', headers: { ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: fd })
+                          if (res.ok) {
+                            const data = await res.json()
+                            setCoachForm((prev) => ({ ...prev, photoUrl: String(data.url || '') }))
+                          }
+                        } catch {}
+                      }}
+                    />
+                  </label>
                 </div>
                 <div className="flex gap-2">
                   <button 
@@ -820,51 +996,58 @@ export default function SchoolAdminDashboard({
               </div>
             )}
 
-            {/* Coaches List */}
+            {/* Search within this season's coaches */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search coaches by name, email or team..."
+                value={coachSearch}
+                onChange={(e) => setCoachSearch(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                aria-label="Search coaches"
+              />
+            </div>
+
+            {/* Coaches List (newest first, paginated) */}
             <div className="grid grid-cols-1 gap-4">
-              {coaches.map((coach) => (
-                <div key={coach.id} className="rounded-xl border bg-white p-4 shadow-sm flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="h-12 w-12 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-bold">
-                      {(coach.data?.name?.[0] || '')}{(coach.data?.surname?.[0] || '')}
-                    </div>
-                    <div>
-                      <div className="font-medium text-gray-900">
-                        {coach.data?.name} {coach.data?.surname}
-                      </div>
-                      <div className="text-sm text-gray-500 flex items-center gap-3">
-                        <span className="flex items-center gap-1">
-                          <Mail className="h-3 w-3" />
-                          {coach.data?.email || coach.email}
-                        </span>
-                        {coach.data?.team && (
-                          <>
-                            <span>•</span>
-                            <span className="bg-purple-50 text-purple-700 px-2 py-0.5 rounded text-xs">
-                              {coach.data.team}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button 
-                      onClick={() => startEditCoach(coach)}
-                      className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600"
-                    >
-                      <Edit className="h-4 w-4" />
-                    </button>
-                    <button className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
+              {coachesSorted.slice(0, visibleCoachCount).map((coach) => (
+                <CoachCard
+                  key={coach.id}
+                  coach={coach}
+                  actions={
+                    <>
+                      <button
+                        onClick={() => startEditCoach(coach)}
+                        className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600"
+                        aria-label="Edit coach"
+                      >
+                        <Edit className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCoach(coach)}
+                        className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600"
+                        aria-label="Delete coach"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </>
+                  }
+                />
               ))}
-              {coaches.length === 0 && (
+              {coachesSorted.length === 0 && (
                 <div className="text-center py-12 text-gray-500">
-                  No coaches registered yet
+                  {coachSearch ? 'No coaches match your search' : 'No coaches registered yet'}
                 </div>
+              )}
+              {coachesSorted.length > visibleCoachCount && (
+                <button
+                  type="button"
+                  onClick={() => setVisibleCoachCount((n) => n + COACH_PAGE_SIZE)}
+                  className="rounded-lg border border-dashed border-gray-300 bg-white px-4 py-3 text-sm font-medium text-gray-600 hover:bg-gray-50"
+                >
+                  Show more ({coachesSorted.length - visibleCoachCount} remaining)
+                </button>
               )}
             </div>
           </div>
@@ -910,11 +1093,14 @@ export default function SchoolAdminDashboard({
                     </div>
                     
                     <div className="flex items-center gap-2 self-end sm:self-auto">
-                      <button className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+                      <button
+                        onClick={() => setViewingPlayer(player)}
+                        className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                      >
                         View Details
                       </button>
                       {isRejected ? (
-                        <button 
+                        <button
                           onClick={() => handleOverrideRejection(player)}
                           className="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 flex items-center gap-2"
                         >
@@ -923,10 +1109,16 @@ export default function SchoolAdminDashboard({
                         </button>
                       ) : (
                         <div className="flex gap-2">
-                           <button className="px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100">
+                           <button
+                             onClick={() => decideRequest(player, 'reject')}
+                             className="px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100"
+                           >
                              Reject
                            </button>
-                           <button className="px-3 py-1.5 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100">
+                           <button
+                             onClick={() => decideRequest(player, 'approve')}
+                             className="px-3 py-1.5 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100"
+                           >
                              Approve
                            </button>
                         </div>
@@ -951,67 +1143,14 @@ export default function SchoolAdminDashboard({
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold">Manage School Admins</h3>
-              <button 
-                onClick={() => setShowAddAdmin(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700"
-              >
-                <Plus className="h-4 w-4" />
-                Add Admin
-              </button>
             </div>
 
-            {showAddAdmin && (
-              <div className="rounded-xl border bg-white p-6 shadow-sm">
-                <h4 className="font-medium mb-4">Add New Admin</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                  <input
-                    placeholder="Name"
-                    value={adminForm.name}
-                    onChange={(e) => setAdminForm({...adminForm, name: e.target.value})}
-                    className="px-4 py-2 border rounded-lg"
-                  />
-                  <input
-                    placeholder="Surname"
-                    value={adminForm.surname}
-                    onChange={(e) => setAdminForm({...adminForm, surname: e.target.value})}
-                    className="px-4 py-2 border rounded-lg"
-                  />
-                  <input
-                    placeholder="Email"
-                    type="email"
-                    value={adminForm.email}
-                    onChange={(e) => setAdminForm({...adminForm, email: e.target.value})}
-                    className="px-4 py-2 border rounded-lg"
-                  />
-                  <input
-                    placeholder="Phone"
-                    value={adminForm.phone}
-                    onChange={(e) => setAdminForm({...adminForm, phone: e.target.value})}
-                    className="px-4 py-2 border rounded-lg"
-                  />
-                  <input
-                    placeholder="ID Number"
-                    value={adminForm.idNumber}
-                    onChange={(e) => setAdminForm({...adminForm, idNumber: e.target.value})}
-                    className="px-4 py-2 border rounded-lg sm:col-span-2"
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={handleAddAdmin}
-                    className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700"
-                  >
-                    Save Admin
-                  </button>
-                  <button 
-                    onClick={() => setShowAddAdmin(false)}
-                    className="px-4 py-2 border rounded-lg hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
+            {/* School admins cannot create admins (server restricts POST /api/admins
+                to EPHSRUAdmin and ZoneCoordinator), so no Add Admin form here. */}
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>School admin accounts are provisioned by your zone coordinator. Contact them to add or change admins for this school.</span>
+            </div>
 
             {/* Admins List */}
             <div className="grid grid-cols-1 gap-4">
@@ -1036,14 +1175,6 @@ export default function SchoolAdminDashboard({
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600">
-                      <Edit className="h-4 w-4" />
-                    </button>
-                    <button className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-600">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
                 </div>
               ))}
               {admins.length === 0 && (
@@ -1067,7 +1198,8 @@ export default function SchoolAdminDashboard({
                   <h4 className="text-sm font-medium text-gray-700 mb-4">Gender Distribution</h4>
                   <div className="space-y-3">
                     {Object.entries(stats.genderSplit).map(([gender, count]) => {
-                      const percentage = stats.totalPlayers ? (count / stats.totalPlayers * 100) : 0
+                      const n = Number(count) || 0
+                      const percentage = stats.totalPlayers ? (n / stats.totalPlayers * 100) : 0
                       return (
                         <div key={gender} className="flex items-center gap-4">
                           <span className="w-20 text-sm text-gray-600">{gender}</span>
@@ -1080,7 +1212,7 @@ export default function SchoolAdminDashboard({
                               style={{ width: `${Math.max(percentage, 5)}%` }}
                             />
                           </div>
-                          <span className="w-12 text-right text-sm text-gray-500">{count}</span>
+                          <span className="w-12 text-right text-sm text-gray-500">{n}</span>
                         </div>
                       )
                     })}
