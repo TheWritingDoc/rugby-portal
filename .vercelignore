@@ -1,7 +1,32 @@
 node_modules
-build
 dist
+build
 .git
 .trae
-.log
 .figma
+*.log
+*.tmp
+
+# Local-only data and artefacts — never needed on Vercel
+server/data
+server/uploads
+uploads
+prisma
+data.db
+
+# Tests, reports, screenshots
+tests
+test-results
+playwright-report*
+allure-results
+*.png
+*.jpg
+*.spec.ts
+playwright.config*.ts
+global-setup.ts
+global-teardown.ts
+custom-reporter.ts
+test-executor.ts
+
+# Process managers / self-host only
+ecosystem.config.cjs

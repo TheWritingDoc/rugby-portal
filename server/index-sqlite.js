@@ -4,7 +4,8 @@ import { sign, verifyToken } from './auth.js'
 import multer from 'multer'
 import fs from 'fs'
 import path from 'path'
-import db from './db-sqlite.js'
+import db from './db.js'
+import { saveUpload, localUploadDir, usingSupabaseStorage } from './storage.js'
 import bcrypt from 'bcryptjs'
 
 const app = express()
@@ -1761,20 +1762,16 @@ app.get('/api/identify', async (req, res) => {
   res.json({ role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, name: user.name, surname: user.surname })
 })
 
-// File uploads
-const uploadDir = path.join(process.cwd(), 'server', 'uploads')
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true })
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => cb(null, Date.now() + '-' + file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_')),
-})
+// File uploads. Buffer in memory, then hand off to the storage layer (Supabase
+// Storage in production, local disk in dev) — the serverless filesystem is
+// read-only so we can't stream straight to disk there.
 const ALLOWED_UPLOAD_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif',
   'application/pdf',
   'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ])
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => cb(null, ALLOWED_UPLOAD_TYPES.has(file.mimetype)),
 })
@@ -1783,13 +1780,19 @@ app.post('/api/upload', (req, res, next) => {
   // Uploads require a session — an open upload endpoint is a free file host
   if (!req.user?.role) return res.status(403).json({ error: 'forbidden' })
   next()
-}, upload.single('file'), (req, res) => {
-  const filename = req.file?.filename
-  if (!filename) return res.status(400).json({ error: 'no file or unsupported type' })
-  const url = `/uploads/${filename}`
-  res.json({ url })
+}, upload.single('file'), async (req, res) => {
+  if (!req.file?.buffer) return res.status(400).json({ error: 'no file or unsupported type' })
+  try {
+    const url = await saveUpload(req.file.buffer, req.file.originalname, req.file.mimetype)
+    res.json({ url })
+  } catch (err) {
+    console.error('[upload]', err?.message || err)
+    res.status(500).json({ error: 'upload_failed' })
+  }
 })
-app.use('/uploads', express.static(uploadDir))
+// Serve locally-stored uploads in dev. In production files live on Supabase's
+// CDN, so this route is a harmless no-op (the directory stays empty).
+if (!usingSupabaseStorage) app.use('/uploads', express.static(localUploadDir))
 
 // Player Approvals endpoints
 app.get('/api/players/pending', (req, res) => {
@@ -2383,9 +2386,17 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'internal_error' })
 })
 
-const port = process.env.PORT || 4000
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`)
-})
+// Bind a port for local dev / self-hosting, but NOT in a serverless runtime,
+// where the app is imported by api/index.js and invoked per-request (Vercel and
+// AWS Lambda both set these env vars).
+const isServerless = Boolean(
+  process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NOW_REGION
+)
+if (!isServerless) {
+  const port = process.env.PORT || 4000
+  app.listen(port, () => {
+    console.log(`🚀 Server running on port ${port}`)
+  })
+}
 
 export default app
