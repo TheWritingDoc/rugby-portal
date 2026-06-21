@@ -133,7 +133,7 @@ export default function App() {
     return () => { window.removeEventListener('storage', checkToken); clearInterval(interval) }
   }, [])
   const isLoggedIn = !!token
-  const showHeader = screen === 'home' || screen === 'login' || !isLoggedIn
+  const showHeader = !isLoggedIn
   return (
     <div className="flex h-full flex-col">
       {showHeader && <Header />}
