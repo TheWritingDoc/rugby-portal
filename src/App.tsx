@@ -128,27 +128,36 @@ export default function App() {
     <div className="flex h-full flex-col">
       <Header />
       <main className="mx-auto w-full max-w-5xl flex-1 p-4">
-        {canGoBack && (
-          <div className="mb-4">
-            <button data-testid="btn-back" onClick={goBack} className="rounded-md border bg-white px-3 py-2">Back</button>
-          </div>
-        )}
-        {screen !== 'home' && !(['school','player','coach','referee','admin'] as any).includes(screen) && (
-          <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {canGoBack && (
+              <button data-testid="btn-back" onClick={goBack} className="flex items-center gap-1 rounded-md border bg-white px-3 py-2 text-sm hover:bg-gray-50">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                Back
+              </button>
+            )}
             <span data-testid="role-badge" className="inline-flex items-center gap-1 rounded-full bg-brand/10 px-3 py-1.5 text-sm font-medium text-brand ring-1 ring-brand/30">
               {ROLE_LABELS[role] || role}
             </span>
-            <button data-testid="btn-home" onClick={() => navigate('home', { reset: true })} className="rounded-md border bg-white px-3 py-2 text-sm hover:bg-gray-50">Home</button>
-            <button data-testid="btn-dashboard" onClick={() => navigate('dashboard')} className="rounded-md border bg-white px-3 py-2 text-sm hover:bg-gray-50">Dashboard</button>
-            <button data-testid="btn-login" onClick={() => navigate('login')} className="rounded-md border bg-white px-3 py-2 text-sm hover:bg-gray-50">Login</button>
-            {(role === 'SchoolAdmin' || role === 'ZoneCoordinator' || role === 'EPHSRUAdmin') && (
-              <button data-testid="btn-approvals" onClick={() => navigate('approvals')} className="rounded-md border bg-white px-3 py-2 text-sm hover:bg-gray-50">Approvals</button>
-            )}
-            {(role === 'ZoneCoordinator' || role === 'EPHSRUAdmin') && (
-              <button data-testid="btn-reports" onClick={() => navigate('reports')} className="rounded-md border bg-white px-3 py-2 text-sm hover:bg-gray-50">Reports</button>
-            )}
           </div>
-        )}
+          <button
+            data-testid="btn-logout"
+            onClick={() => {
+              localStorage.removeItem('auth:token')
+              localStorage.removeItem('auth:role')
+              localStorage.removeItem('auth:email')
+              localStorage.removeItem('auth:zoneId')
+              localStorage.removeItem('auth:schoolId')
+              setRole('Player')
+              navigate('home', { reset: true })
+              window.location.reload()
+            }}
+            className="flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-100"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+            Logout
+          </button>
+        </div>
         {screen === 'home' && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Screen title="Sign In" subtitle="Already registered? Sign in to your dashboard.">
