@@ -124,7 +124,15 @@ export default function App() {
   }, [])
   
   const canGoBack = navStack.length > 0
-  const isLoggedIn = !!localStorage.getItem('auth:token')
+  const [token, setToken] = useState(() => localStorage.getItem('auth:token'))
+  useEffect(() => {
+    const checkToken = () => setToken(localStorage.getItem('auth:token'))
+    checkToken()
+    window.addEventListener('storage', checkToken)
+    const interval = setInterval(checkToken, 1000)
+    return () => { window.removeEventListener('storage', checkToken); clearInterval(interval) }
+  }, [])
+  const isLoggedIn = !!token
   const showHeader = screen === 'home' || screen === 'login' || !isLoggedIn
   return (
     <div className="flex h-full flex-col">
