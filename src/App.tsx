@@ -18,7 +18,7 @@ import Toaster from './components/Toaster'
 import { notifyWarning } from './utils/notify'
 
 type FormKey = 'school' | 'player' | 'coach' | 'referee' | 'admin'
-type ScreenKey = FormKey | 'home' | 'dashboard' | 'login' | 'approvals' | 'reports'
+type ScreenKey = FormKey | 'home' | 'dashboard' | 'login' | 'approvals' | 'reports' | 'create-user'
 
 const ROLE_LABELS: Record<string, string> = {
   Player: 'Player',
@@ -150,31 +150,56 @@ export default function App() {
               {ROLE_LABELS[role] || role}
             </span>
           </div>
-          <button
-            data-testid="btn-logout"
-            onClick={() => {
-              localStorage.removeItem('auth:token')
-              localStorage.removeItem('auth:role')
-              localStorage.removeItem('auth:email')
-              localStorage.removeItem('auth:zoneId')
-              localStorage.removeItem('auth:schoolId')
-              setRole('Player')
-              navigate('home', { reset: true })
-              window.location.reload()
-            }}
-            className="flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-100"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
-            Logout
-          </button>
+          <div className="flex items-center gap-2">
+            {(role === 'EPHSRUAdmin' || role === 'ZoneCoordinator' || role === 'SchoolAdmin' || role === 'Coach') && (
+              <button
+                data-testid="btn-create-user"
+                onClick={() => navigate('create-user')}
+                className="flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-100"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/></svg>
+                Create User
+              </button>
+            )}
+            <button
+              data-testid="btn-logout"
+              onClick={() => {
+                localStorage.removeItem('auth:token')
+                localStorage.removeItem('auth:role')
+                localStorage.removeItem('auth:email')
+                localStorage.removeItem('auth:zoneId')
+                localStorage.removeItem('auth:schoolId')
+                setRole('Player')
+                navigate('home', { reset: true })
+                window.location.reload()
+              }}
+              className="flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-100"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+              Logout
+            </button>
+          </div>
         </div>
         {screen === 'home' && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Screen title="Sign In" subtitle="Already registered? Sign in to your dashboard.">
               <Login onRole={setRole} onSuccess={() => navigate('dashboard')} />
             </Screen>
-            <Screen title="Register" subtitle="New to EPHSRU rugby? Create your account and choose what to register.">
-              <Selection onChoose={(k) => navigate(k as ScreenKey)} role={role} restrictByRole={false} />
+            <Screen title="Request Access" subtitle="Need an account? Contact your administrator.">
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  User creation is managed by administrators. Contact the appropriate person based on your role:
+                </p>
+                <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
+                  <li><strong>Players:</strong> Contact your coach</li>
+                  <li><strong>Coaches/Referees:</strong> Contact your school admin</li>
+                  <li><strong>School Admins:</strong> Contact your zone coordinator</li>
+                  <li><strong>Zone Coordinators:</strong> Contact EPHSRU admin</li>
+                </ul>
+                <div className="rounded-md bg-blue-50 p-3 text-sm text-blue-700">
+                  <strong>Already have credentials?</strong> Use the Sign In form on the left.
+                </div>
+              </div>
             </Screen>
           </div>
         )}
@@ -187,6 +212,11 @@ export default function App() {
         {screen === 'approvals' && <Screen title="Approvals"><Approvals /></Screen>}
         {screen === 'reports' && <Screen title="Reports"><Reports /></Screen>}
         {screen === 'dashboard' && <Screen title="Dashboard"><Dashboard role={role} /></Screen>}
+        {screen === 'create-user' && (
+          <Screen title="Create User" subtitle="Create a new user account below.">
+            <Selection onChoose={(k) => navigate(k as ScreenKey)} role={role} restrictByRole={true} />
+          </Screen>
+        )}
         <RoleGate role={role} allow={['EPHSRUAdmin']}>
           <div className="mt-6">
             <AuditLogs />
@@ -211,18 +241,19 @@ function Screen({ title, subtitle, children }: { title: string; subtitle?: strin
 
 function canAccess(screen: string, role: 'Player' | 'Referee' | 'Coach' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin') {
   const map: Record<string, string[]> = {
-    // Registration forms are open to all for self-registration; Selection component gates the actual options
-    school: ['Player','Referee','Coach','SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
-    player: ['Player','Referee','Coach','SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
-    coach: ['Player','Referee','Coach','SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
-    referee: ['Player','Referee','Coach','SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
-    admin: ['Player','Referee','Coach','SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
+    // Registration forms - only accessible through create-user screen
+    school: ['EPHSRUAdmin', 'ZoneCoordinator', 'SchoolAdmin', 'Coach'],
+    player: ['Coach', 'SchoolAdmin'],
+    coach: ['SchoolAdmin'],
+    referee: ['SchoolAdmin'],
+    admin: ['ZoneCoordinator', 'EPHSRUAdmin'],
     // Screens
     approvals: ['SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
     reports: ['ZoneCoordinator','EPHSRUAdmin'],
     dashboard: ['Player','Referee','Coach','SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
     login: ['Player','Referee','Coach','SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
     home: ['Player','Referee','Coach','SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
+    'create-user': ['EPHSRUAdmin', 'ZoneCoordinator', 'SchoolAdmin', 'Coach'],
   }
   const allowed = map[screen] || []
   return allowed.includes(role)
