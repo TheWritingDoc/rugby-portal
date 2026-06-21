@@ -124,9 +124,11 @@ export default function App() {
   }, [])
   
   const canGoBack = navStack.length > 0
+  const isLoggedIn = !!localStorage.getItem('auth:token')
+  const showHeader = screen === 'home' || screen === 'login' || !isLoggedIn
   return (
     <div className="flex h-full flex-col">
-      <Header />
+      {showHeader && <Header />}
       <main className="mx-auto w-full max-w-5xl flex-1 p-4">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
