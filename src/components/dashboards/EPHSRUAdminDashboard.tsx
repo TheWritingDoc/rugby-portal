@@ -12,6 +12,9 @@ import { apiUrl } from '../../utils/apiBase'
 import { getToken } from '../../utils/auth'
 import { notifyError } from '../../utils/notify'
 import { CoachAvatar } from '../CoachCard'
+import PlayerProfileModal from '../modals/PlayerProfileModal'
+import StaffProfileModal from '../modals/StaffProfileModal'
+import { schoolNameOf, zoneNameOf } from '../../utils/labels'
 
 interface EPHSRUAdminDashboardProps {
   zones: any[]
@@ -52,13 +55,20 @@ export default function EPHSRUAdminDashboard({
   const [selectedZoneDetail, setSelectedZoneDetail] = useState<any>(null)
   const [selectedSchoolDetail, setSelectedSchoolDetail] = useState<any>(null)
   const [hideUnregistered, setHideUnregistered] = useState(false)
+  // Profile modals: any player/staff member anywhere in the union is one click away
+  const [viewingPlayer, setViewingPlayer] = useState<any>(null)
+  const [viewingStaff, setViewingStaff] = useState<{ person: any; role: 'Coach' | 'Referee' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin' } | null>(null)
+  const [expandedSchool, setExpandedSchool] = useState<string>('')
 
   useEffect(() => {
-    // Reset drill-down states when changing main tabs
+    // Reset drill-down states when changing main tabs; the search box is
+    // per-tab in spirit, so clear it too (a Users search must not silently
+    // filter the Schools tab's coordinator list).
     if (activeTab !== 'schools') {
       setSelectedZone('')
       setSelectedSchoolDetail(null)
     }
+    setSearchQuery('')
   }, [activeTab])
   const [resultsView, setResultsView] = useState<'cards' | 'list'>(() => {
     try {
@@ -708,6 +718,26 @@ export default function EPHSRUAdminDashboard({
                     <h2 className="text-xl font-bold text-gray-900">{selectedSchoolDetail.data?.name || selectedSchoolDetail.name}</h2>
                     <p className="text-sm text-gray-500">School Management Dashboard</p>
                   </div>
+                  {(() => {
+                    const zid = String(selectedSchoolDetail.data?.zoneId || selectedSchoolDetail.zoneId || '')
+                    const coord = admins.find((a) => (a.role === 'ZoneCoordinator' || a.data?.role === 'ZoneCoordinator') && String(a.data?.zoneId || a.zoneId) === zid)
+                    return (
+                      <div className="ml-auto flex items-center gap-2">
+                        <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200">{zoneNameOf(zid)}</span>
+                        {coord && (
+                          <button
+                            type="button"
+                            onClick={() => setViewingStaff({ person: coord, role: 'ZoneCoordinator' })}
+                            className="flex items-center gap-2 rounded-full border border-indigo-200 bg-white px-3 py-1 text-xs font-medium text-gray-700 hover:bg-indigo-50"
+                            title="View zone coordinator profile"
+                          >
+                            <MapPin size={12} className="text-indigo-500" aria-hidden="true" />
+                            Coordinator: {coord.data?.name} {coord.data?.surname}
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
 
                 {/* Hierarchical View: Coaches by Age Group -> Players */}
@@ -745,7 +775,12 @@ export default function EPHSRUAdminDashboard({
                                     <div className="grid grid-cols-1 gap-4">
                                        {ageGroupCoaches.map(coach => (
                                           <div key={coach.id} className="rounded-lg border bg-white overflow-hidden">
-                                             <div className="flex items-center gap-3 p-3 bg-green-50 border-b border-green-100">
+                                             <button
+                                                type="button"
+                                                onClick={() => setViewingStaff({ person: coach, role: 'Coach' })}
+                                                className="flex w-full items-center gap-3 p-3 bg-green-50 border-b border-green-100 text-left hover:bg-green-100 transition-colors"
+                                                title="View coach profile"
+                                             >
                                                 <CoachAvatar coach={coach} size="md" />
                                                 <div>
                                                    <div className="font-medium text-gray-900">{coach.data?.name} {coach.data?.surname}</div>
@@ -754,7 +789,8 @@ export default function EPHSRUAdminDashboard({
                                                       {coach.data?.qualifications && coach.data.qualifications !== 'None' ? ` • ${coach.data.qualifications}` : ''}
                                                    </div>
                                                 </div>
-                                             </div>
+                                                <Eye size={15} className="ml-auto shrink-0 text-green-600" aria-hidden="true" />
+                                             </button>
                                              
                                              {/* Players under this coach (in this age group) */}
                                              <div className="p-0">
@@ -783,7 +819,7 @@ export default function EPHSRUAdminDashboard({
                                                                   </span>
                                                                </td>
                                                                <td className="px-4 py-2 text-right">
-                                                                  <button className="text-indigo-600 hover:text-indigo-900 font-medium text-xs">View</button>
+                                                                  <button onClick={() => setViewingPlayer(player)} className="text-indigo-600 hover:text-indigo-900 font-medium text-xs bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-md transition-colors">View</button>
                                                                </td>
                                                             </tr>
                                                          ))}
@@ -820,7 +856,7 @@ export default function EPHSRUAdminDashboard({
                                                       </span>
                                                    </td>
                                                    <td className="px-4 py-2 text-right">
-                                                      <button className="text-indigo-600 hover:text-indigo-900 font-medium text-xs">View</button>
+                                                      <button onClick={() => setViewingPlayer(player)} className="text-indigo-600 hover:text-indigo-900 font-medium text-xs bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-md transition-colors">View</button>
                                                    </td>
                                                 </tr>
                                              ))}
@@ -845,39 +881,87 @@ export default function EPHSRUAdminDashboard({
                          !['U14', 'U15', 'U16', 'U17', 'U19'].includes(p.data?.team || p.data?.ageGroup)
                       );
                       const schoolAdmins = admins.filter(a => String(a.data?.schoolId || a.schoolId) === String(selectedSchoolDetail.id));
+                      // Referees carry the school in their data blob (zone is a column)
+                      const schoolReferees = referees.filter(r => String(r.data?.schoolId || '') === String(selectedSchoolDetail.id));
 
-                      if (unassignedCoaches.length === 0 && unassignedPlayers.length === 0 && schoolAdmins.length === 0) return null;
+                      if (unassignedCoaches.length === 0 && unassignedPlayers.length === 0 && schoolAdmins.length === 0 && schoolReferees.length === 0) return null;
+
+                      const StaffChip = ({ person, role, tint, text }: any) => (
+                        <button
+                          type="button"
+                          onClick={() => setViewingStaff({ person, role })}
+                          className={`flex w-full items-center gap-3 p-3 rounded-lg border text-left transition-colors hover:shadow-sm ${tint}`}
+                          title={`View ${role} profile`}
+                        >
+                          <div className={`h-10 w-10 shrink-0 rounded-full flex items-center justify-center font-bold ${text}`}>
+                            {(person.data?.name?.[0] || '')}{(person.data?.surname?.[0] || '')}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-medium text-gray-900 truncate">{person.data?.name} {person.data?.surname}</div>
+                            <div className="text-xs text-gray-500 truncate">{person.data?.email || person.email}</div>
+                          </div>
+                          <Eye size={14} className="ml-auto shrink-0 text-gray-400" aria-hidden="true" />
+                        </button>
+                      )
 
                       return (
                         <div className="rounded-xl border bg-white overflow-hidden shadow-sm mt-6">
                            <div className="bg-gray-50 px-6 py-3 border-b">
-                              <h3 className="font-bold text-gray-800">Other Staff & Unassigned</h3>
+                              <h3 className="font-bold text-gray-800">School Staff & Officials</h3>
                            </div>
                            <div className="p-6 space-y-6">
                               {schoolAdmins.length > 0 && (
                                  <div>
-                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">School Admins</h4>
+                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">School Admins ({schoolAdmins.length})</h4>
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                        {schoolAdmins.map(admin => (
-                                          <div key={admin.id} className="flex items-center gap-3 p-3 rounded-lg border bg-blue-50 border-blue-100">
-                                             <div className="h-10 w-10 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold">
-                                                {(admin.data?.name?.[0] || '')}{(admin.data?.surname?.[0] || '')}
-                                             </div>
-                                             <div>
-                                                <div className="font-medium text-gray-900">{admin.data?.name} {admin.data?.surname}</div>
-                                                <div className="text-xs text-gray-500">{admin.data?.email || admin.email}</div>
-                                             </div>
-                                          </div>
+                                          <StaffChip key={admin.id} person={admin} role="SchoolAdmin" tint="bg-blue-50 border-blue-100 hover:bg-blue-100" text="bg-blue-200 text-blue-700" />
                                        ))}
                                     </div>
                                  </div>
                               )}
-                              
-                              {(unassignedCoaches.length > 0 || unassignedPlayers.length > 0) && (
+
+                              {schoolReferees.length > 0 && (
                                  <div>
-                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Unassigned Staff/Players</h4>
-                                    <div className="text-sm text-gray-500">
-                                       {unassignedCoaches.length} Coaches, {unassignedPlayers.length} Players without specific age group assignment.
+                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Referees ({schoolReferees.length})</h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                       {schoolReferees.map(ref => (
+                                          <StaffChip key={ref.id} person={ref} role="Referee" tint="bg-amber-50 border-amber-100 hover:bg-amber-100" text="bg-amber-200 text-amber-700" />
+                                       ))}
+                                    </div>
+                                 </div>
+                              )}
+
+                              {unassignedCoaches.length > 0 && (
+                                 <div>
+                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Coaches without a team ({unassignedCoaches.length})</h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                       {unassignedCoaches.map(coach => (
+                                          <StaffChip key={coach.id} person={coach} role="Coach" tint="bg-green-50 border-green-100 hover:bg-green-100" text="bg-green-200 text-green-700" />
+                                       ))}
+                                    </div>
+                                 </div>
+                              )}
+
+                              {unassignedPlayers.length > 0 && (
+                                 <div>
+                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Players without an age group ({unassignedPlayers.length})</h4>
+                                    <div className="rounded-lg border overflow-hidden">
+                                       <table className="w-full text-sm">
+                                          <tbody className="divide-y divide-gray-100">
+                                             {unassignedPlayers.map(player => (
+                                                <tr key={player.id} className="hover:bg-gray-50">
+                                                   <td className="px-4 py-2">
+                                                      <div className="font-medium text-gray-900">{player.data?.name} {player.data?.surname}</div>
+                                                   </td>
+                                                   <td className="px-4 py-2 text-gray-600">{player.data?.position || '—'}</td>
+                                                   <td className="px-4 py-2 text-right">
+                                                      <button onClick={() => setViewingPlayer(player)} className="text-indigo-600 hover:text-indigo-900 font-medium text-xs bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-md transition-colors">View</button>
+                                                   </td>
+                                                </tr>
+                                             ))}
+                                          </tbody>
+                                       </table>
                                     </div>
                                  </div>
                               )}
@@ -891,56 +975,139 @@ export default function EPHSRUAdminDashboard({
           </div>
         )}
 
-        {activeTab === 'users' && (
-          <div className="space-y-6">
-            <div className="flex items-center gap-4">
-              <div className="relative flex-1 max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input type="text" placeholder="Search users..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300" />
+        {activeTab === 'users' && (() => {
+          // Union directory grouped by school (not a flat list): every school
+          // shows its admins, coaches, referees and players; coordinators sit
+          // at zone level. Every person opens a profile.
+          const q = searchQuery.trim().toLowerCase()
+          const matches = (item: any) =>
+            !q || `${item.data?.name || ''} ${item.data?.surname || ''} ${item.data?.email || item.email || ''}`.toLowerCase().includes(q)
+          const schoolIdOf = (x: any) => String(x.data?.schoolId || x.schoolId || '')
+
+          const coordinators = admins.filter((a) => (a.role === 'ZoneCoordinator' || a.data?.role === 'ZoneCoordinator') && matches(a))
+
+          const bySchool = new Map<string, { players: any[]; coaches: any[]; referees: any[]; admins: any[] }>()
+          const bucket = (sid: string) => {
+            if (!bySchool.has(sid)) bySchool.set(sid, { players: [], coaches: [], referees: [], admins: [] })
+            return bySchool.get(sid)!
+          }
+          for (const p of players) if (schoolIdOf(p) && matches(p)) bucket(schoolIdOf(p)).players.push(p)
+          for (const c of coaches) if (schoolIdOf(c) && matches(c)) bucket(schoolIdOf(c)).coaches.push(c)
+          for (const r of referees) if (schoolIdOf(r) && matches(r)) bucket(schoolIdOf(r)).referees.push(r)
+          for (const a of admins) if ((a.role === 'SchoolAdmin' || a.data?.role === 'SchoolAdmin') && schoolIdOf(a) && matches(a)) bucket(schoolIdOf(a)).admins.push(a)
+
+          const groups = [...bySchool.entries()]
+            .map(([sid, g]) => ({ sid, ...g, total: g.players.length + g.coaches.length + g.referees.length + g.admins.length }))
+            .filter((g) => g.total > 0)
+            .sort((a, b) => b.total - a.total)
+
+          const PersonRow = ({ item, onClick, tint, text }: any) => (
+            <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-gray-100 transition-colors">
+              <div className={`h-8 w-8 shrink-0 rounded-full ${tint} flex items-center justify-center ${text} text-xs font-bold`}>
+                {(item.data?.name?.[0] || '')}{(item.data?.surname?.[0] || '')}
               </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-gray-900 truncate">{item.data?.name} {item.data?.surname}</div>
+                <div className="text-xs text-gray-500 truncate">{item.data?.email || item.email}</div>
+              </div>
+              <Eye size={13} className="shrink-0 text-gray-300" aria-hidden="true" />
+            </button>
+          )
+
+          const Section = ({ label, items, role, tint, text, asPlayer }: any) => items.length === 0 ? null : (
+            <div>
+              <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-500">{label} ({items.length})</h4>
+              <div className="grid grid-cols-1 gap-1 md:grid-cols-2 lg:grid-cols-3">
+                {items.slice(0, 120).map((item: any) => (
+                  <PersonRow
+                    key={item.id}
+                    item={item}
+                    tint={tint}
+                    text={text}
+                    onClick={() => (asPlayer ? setViewingPlayer(item) : setViewingStaff({ person: item, role }))}
+                  />
+                ))}
+              </div>
+              {items.length > 120 && <div className="mt-1 text-xs text-gray-400">…and {items.length - 120} more (refine the search)</div>}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {[
-                { title: 'Players', data: players, icon: Users, color: 'blue' },
-                { title: 'Coaches', data: coaches, icon: UserCheck, color: 'green' },
-                { title: 'Referees', data: referees, icon: Award, color: 'amber' },
-                { title: 'Admins', data: admins, icon: Shield, color: 'rose' }
-              ].map((category) => {
-                const c = ACCENT[category.color] || ACCENT.gray
-                const q = searchQuery.trim().toLowerCase()
-                const visible = q
-                  ? category.data.filter((item: any) => `${item.data?.name || ''} ${item.data?.surname || ''} ${item.data?.email || item.email || ''}`.toLowerCase().includes(q))
-                  : category.data
-                return (
-                  <div key={category.title} className="rounded-xl border bg-white p-4 shadow-sm">
-                    <div className="flex items-center gap-3 mb-4">
-                      <div className={`p-2 ${c.tint} rounded-lg`}>
-                        <category.icon className={`h-5 w-5 ${c.icon}`} />
-                      </div>
-                      <h3 className="font-semibold text-gray-900">{category.title}</h3>
-                      <span className="ml-auto text-2xl font-bold text-gray-900">{visible.length}</span>
-                    </div>
-                    <div className="space-y-2 max-h-64 overflow-y-auto">
-                      {visible.slice(0, 25).map((item: any) => (
-                        <div key={item.id} className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg">
-                          <div className={`h-8 w-8 rounded-full ${c.tint} flex items-center justify-center ${c.text} text-xs font-bold`}>
-                            {(item.data?.name?.[0] || '')}{(item.data?.surname?.[0] || '')}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-medium text-gray-900 truncate">{item.data?.name} {item.data?.surname}</div>
-                            <div className="text-xs text-gray-500 truncate">{item.data?.email || item.email}</div>
-                          </div>
+          )
+
+          return (
+            <div className="space-y-6" data-testid="users-by-school">
+              <div className="flex items-center gap-4">
+                <div className="relative flex-1 max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <input type="text" placeholder="Search people by name or email..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300" />
+                </div>
+                <div className="text-sm text-gray-500">{groups.length} school{groups.length === 1 ? '' : 's'}</div>
+              </div>
+
+              {/* Zone coordinators live at zone level, above the schools */}
+              {coordinators.length > 0 && (
+                <div className="rounded-xl border bg-white p-4 shadow-sm">
+                  <div className="mb-3 flex items-center gap-2">
+                    <MapPin className="h-5 w-5 text-indigo-600" />
+                    <h3 className="font-semibold text-gray-900">Zone Coordinators ({coordinators.length})</h3>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1 md:grid-cols-2 lg:grid-cols-3">
+                    {coordinators.map((a) => (
+                      <button key={a.id} type="button" onClick={() => setViewingStaff({ person: a, role: 'ZoneCoordinator' })}
+                        className="flex w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-indigo-50 transition-colors">
+                        <div className="h-8 w-8 shrink-0 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-xs font-bold">
+                          {(a.data?.name?.[0] || '')}{(a.data?.surname?.[0] || '')}
                         </div>
-                      ))}
-                      {visible.length === 0 && <div className="p-2 text-sm text-gray-400 italic">No matches</div>}
-                    </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-gray-900 truncate">{a.data?.name} {a.data?.surname}</div>
+                          <div className="text-xs text-gray-500 truncate">{zoneNameOf(String(a.data?.zoneId || a.zoneId || ''))}</div>
+                        </div>
+                        <Eye size={13} className="shrink-0 text-gray-300" aria-hidden="true" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* One card per school, expandable */}
+              {groups.map((g) => {
+                const open = expandedSchool === g.sid || Boolean(q)
+                return (
+                  <div key={g.sid} className="rounded-xl border bg-white shadow-sm overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedSchool(open && !q ? '' : g.sid)}
+                      className="flex w-full items-center gap-3 px-5 py-3.5 text-left hover:bg-gray-50 transition-colors"
+                    >
+                      <School className="h-5 w-5 shrink-0 text-purple-600" aria-hidden="true" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-gray-900 truncate">{schoolNameOf(g.sid)}</div>
+                        <div className="text-xs text-gray-500">{zoneNameOf(String(players.concat(g.coaches, g.admins).find((x: any) => schoolIdOf(x) === g.sid)?.data?.zoneId || g.players[0]?.data?.zoneId || g.coaches[0]?.data?.zoneId || g.admins[0]?.data?.zoneId || ''))}</div>
+                      </div>
+                      <div className="hidden sm:flex items-center gap-3 text-xs text-gray-500">
+                        <span><b className="text-gray-900">{g.admins.length}</b> admins</span>
+                        <span><b className="text-gray-900">{g.coaches.length}</b> coaches</span>
+                        <span><b className="text-gray-900">{g.referees.length}</b> referees</span>
+                        <span><b className="text-gray-900">{g.players.length}</b> players</span>
+                      </div>
+                      <ChevronRight className={`h-4 w-4 shrink-0 text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
+                    </button>
+                    {open && (
+                      <div className="space-y-5 border-t px-5 py-4">
+                        <Section label="School Admins" items={g.admins} role="SchoolAdmin" tint="bg-blue-100" text="text-blue-700" />
+                        <Section label="Coaches" items={g.coaches} role="Coach" tint="bg-green-100" text="text-green-700" />
+                        <Section label="Referees" items={g.referees} role="Referee" tint="bg-amber-100" text="text-amber-700" />
+                        <Section label="Players" items={g.players} asPlayer tint="bg-gray-200" text="text-gray-700" />
+                      </div>
+                    )}
                   </div>
                 )
               })}
+              {groups.length === 0 && (
+                <div className="rounded-xl border-2 border-dashed bg-gray-50 py-12 text-center text-gray-500">No people match this search.</div>
+              )}
             </div>
-          </div>
-        )}
+          )
+        })()}
 
         {activeTab === 'approvals' && (
           <div className="space-y-6">
@@ -1100,6 +1267,14 @@ export default function EPHSRUAdminDashboard({
           </div>
         )}
       </div>
+
+      {/* Profile modals — reachable from the Schools drill-down and the Users directory */}
+      {viewingPlayer && (
+        <PlayerProfileModal player={viewingPlayer} role="EPHSRUAdmin" onClose={() => setViewingPlayer(null)} onUpdated={onRefresh} />
+      )}
+      {viewingStaff && (
+        <StaffProfileModal person={viewingStaff.person} role={viewingStaff.role} onClose={() => setViewingStaff(null)} />
+      )}
     </div>
   )
 }
