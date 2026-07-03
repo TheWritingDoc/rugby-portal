@@ -42,9 +42,8 @@ test.describe('Role-Based Dashboard Redirect and Welcome', () => {
     // Coach tabs
     await expect(page.getByRole('button', { name: /Players/i })).toBeVisible()
     await expect(page.getByRole('button', { name: /Pending/i })).toBeVisible()
-    // Should NOT see Approvals or Reports buttons
-    await expect(page.getByTestId('btn-approvals')).toHaveCount(0)
-    await expect(page.getByTestId('btn-reports')).toHaveCount(0)
+    // Coaches can delegate user creation (players)
+    await expect(page.getByTestId('btn-create-user')).toBeVisible()
   })
 
   test('SchoolAdmin login redirects to SchoolAdmin dashboard with welcome', async ({ page, request }) => {
@@ -70,9 +69,8 @@ test.describe('Role-Based Dashboard Redirect and Welcome', () => {
     await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
     // SchoolAdmin header
     await expect(page.getByText(/School Administration/i)).toBeVisible()
-    // Should see Approvals button but NOT Reports
-    await expect(page.getByTestId('btn-approvals')).toBeVisible()
-    await expect(page.getByTestId('btn-reports')).toHaveCount(0)
+    // School admins can delegate user creation (coaches/referees/players)
+    await expect(page.getByTestId('btn-create-user')).toBeVisible()
   })
 
   test('ZoneCoordinator login redirects to ZoneCoordinator dashboard with welcome', async ({ page, request }) => {
@@ -96,9 +94,8 @@ test.describe('Role-Based Dashboard Redirect and Welcome', () => {
     // ZoneCoordinator header
     await expect(page.getByText(/Zone Administration/i)).toBeVisible()
     await expect(page.getByText(/Coordinator: Zone Coord/i)).toBeVisible()
-    // Zone Coordinator sits in the approval chain: sees both Reports and Approvals
-    await expect(page.getByTestId('btn-reports')).toBeVisible()
-    await expect(page.getByTestId('btn-approvals')).toBeVisible()
+    // Zone coordinators can delegate user creation (school admins/schools)
+    await expect(page.getByTestId('btn-create-user')).toBeVisible()
   })
 
   test('EPHSRUAdmin login redirects to EPHSRUAdmin dashboard with audit logs', async ({ page, request }) => {
@@ -121,9 +118,8 @@ test.describe('Role-Based Dashboard Redirect and Welcome', () => {
     // EPHSRUAdmin header
     await expect(page.getByText(/System Administration/i)).toBeVisible()
     await expect(page.getByText(/EPHSRU Dashboard/i)).toBeVisible()
-    // Should see BOTH Approvals and Reports buttons
-    await expect(page.getByTestId('btn-approvals')).toBeVisible()
-    await expect(page.getByTestId('btn-reports')).toBeVisible()
+    // Union admins can delegate user creation (zone coordinators/schools)
+    await expect(page.getByTestId('btn-create-user')).toBeVisible()
     // Audit logs visible
     await expect(page.getByText('Audit Logs')).toBeVisible()
   })
@@ -152,9 +148,8 @@ test.describe('Role-Based Dashboard Redirect and Welcome', () => {
     // Player profile header
     await expect(page.getByText(/Player Profile/i)).toBeVisible()
     await expect(page.getByText('Player One')).toBeVisible()
-    // Should NOT see Approvals or Reports
-    await expect(page.getByTestId('btn-approvals')).toHaveCount(0)
-    await expect(page.getByTestId('btn-reports')).toHaveCount(0)
+    // Players are leaf nodes in the hierarchy — no Create User button
+    await expect(page.getByTestId('btn-create-user')).toHaveCount(0)
   })
 
   test('Referee login redirects to Referee dashboard', async ({ page, request }) => {

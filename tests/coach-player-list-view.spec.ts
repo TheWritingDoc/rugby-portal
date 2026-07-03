@@ -60,13 +60,14 @@ test('Coach Players search supports list view and row click opens player', async
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: 'Search' }).click()
-  await page.getByRole('button', { name: 'List' }).click()
+  // aria-label match: plain "List" would also hit player cards whose names contain "ListView"
+  await page.getByRole('button', { name: 'List view', exact: true }).click()
   await expect(page.locator('table')).toBeVisible()
 
   const row = page.locator('tbody').getByRole('row', { name: /U16\s+ListView\s+Player/i }).first()
   await expect(row).toBeVisible()
   await row.click()
 
-  await expect(page.getByText('ListView Player')).toBeVisible()
+  await expect(page.getByText('ListView Player').first()).toBeVisible()
 })
 

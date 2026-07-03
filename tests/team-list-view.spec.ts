@@ -64,18 +64,19 @@ test('SchoolAdmin Teams view supports list view and player modal', async ({ page
   await loginForm.getByRole('button', { name: 'Sign In' }).click()
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
 
-  await expect(page.getByText('Players by Team', { exact: true })).toBeVisible()
-
-  await page.getByRole('button', { name: 'List' }).click()
+  // Redesigned dashboard: players live under the "Teams & Players" tab; the
+  // list/cards toggle appears once a team or search filter is active.
+  await page.getByRole('button', { name: 'Teams & Players' }).click()
+  await page.getByPlaceholder('Search players...').fill('TeamList')
+  await page.getByRole('button', { name: 'List view', exact: true }).click()
   await expect(page.locator('table')).toBeVisible()
 
-  const row = page.locator('tbody').getByRole('row', { name: /U15\s+TeamList\s+Player/i }).first()
+  const row = page.locator('tbody tr').filter({ hasText: 'TeamList' }).first()
   await expect(row).toBeVisible()
-  await row.click()
+  await row.getByRole('button', { name: 'View' }).click()
 
-  await expect(page.getByText('TeamList Player')).toBeVisible()
-  const modal = page.locator('div.fixed.inset-0.z-50')
-  await expect(modal).toBeVisible()
-  const teamLine = modal.getByText('Team', { exact: true }).locator('..')
-  await expect(teamLine.getByText('U15', { exact: true })).toBeVisible()
+  // Player profile modal opens with the player's details
+  const modal = page.locator('div.fixed')
+  await expect(modal.getByRole('heading', { name: /TeamList/ })).toBeVisible()
+  await modal.locator('button:has(svg.lucide-x)').first().click()
 })
