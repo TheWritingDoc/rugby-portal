@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { validSaId } from './helpers/said'
+import { uiLogin, startCreateUser } from './helpers/delegation'
+
+/**
+ * Core UI flows under the hierarchical-delegation model: public self-signup is
+ * gone, so accounts are created by a superior via the Create User screen.
+ */
+
 async function ensureAdmin(request: any, email: string, role: string, zoneId?: string, schoolId?: string) {
   const tokenRes = await request.post('http://localhost:4000/api/login', { data: { role: 'EPHSRUAdmin' }, headers: { 'Content-Type': 'application/json' } })
   const { token } = await tokenRes.json()
@@ -11,16 +18,20 @@ async function ensureCoach(request: any, email: string, zoneId: string, schoolId
   await request.post('http://localhost:4000/api/coaches', { data: { name: 'E2E', surname: 'Coach', zoneId, schoolId, email }, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` } })
 }
 
-test('Home renders and navigates to School form', async ({ page }) => {
+test('Home shows sign-in plus delegated-access guidance (no public signup)', async ({ page }) => {
   await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
+  await page.evaluate(() => { try { localStorage.clear() } catch {} })
+  await page.reload()
   await expect(page.getByText('EPHSRU Rugby Portal')).toBeVisible()
-  const registerSection = page.locator('section:has(h1:has-text("Register"))')
-  await registerSection.getByLabel('Email').fill(`e2e.school.${Date.now()}@example.com`)
-  await registerSection.getByLabel('Create Password').fill('secret123')
-  await registerSection.getByLabel('Verify Password').fill('secret123')
-  await registerSection.getByLabel('Select registration form').selectOption({ value: 'school' })
-  await registerSection.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.getByRole('button', { name: 'Sign In' })).toBeVisible()
+  await expect(page.getByText('User creation is managed by administrators')).toBeVisible()
+})
+
+test('Zone coordinator opens the school registration form via Create User', async ({ page, request }) => {
+  const email = `e2e.zc.${Date.now()}@example.com`
+  await ensureAdmin(request, email, 'ZoneCoordinator', '1')
+  await uiLogin(page, email)
+  await startCreateUser(page, { email: `e2e.school.${Date.now()}@example.com`, type: 'school' })
   await page.getByTestId('zone-select').waitFor()
   await page.getByTestId('zone-select').selectOption({ index: 1 })
   await page.getByTestId('school-select').waitFor()
@@ -28,214 +39,70 @@ test('Home renders and navigates to School form', async ({ page }) => {
   await expect(page.getByText('Pool')).toBeVisible()
 })
 
-test('Player age suggestions and submission', async ({ page }) => {
-  await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  const registerSection = page.locator('section:has(h1:has-text("Register"))')
-  await registerSection.getByLabel('Email').fill(`e2e.player.${Date.now()}@example.com`)
-  await registerSection.getByLabel('Create Password').fill('secret123')
-  await registerSection.getByLabel('Verify Password').fill('secret123')
-  await registerSection.getByLabel('Select registration form').selectOption({ value: 'player' })
-  await registerSection.getByRole('button', { name: 'Continue' }).click()
+test('Coach creates a player: age suggestions, SA ID check, POPIA consent', async ({ page, request }) => {
+  const email = `e2e.coach.${Date.now()}@example.com`
+  await ensureCoach(request, email, '1', 'S1')
+  await uiLogin(page, email)
+  await startCreateUser(page, { email: `e2e.player.${Date.now()}@example.com`, type: 'player' })
   await page.getByTestId('zone-select').waitFor()
   await page.getByTestId('zone-select').selectOption({ index: 1 })
   await page.getByTestId('school-select').waitFor()
   await page.getByTestId('school-select').selectOption({ index: 1 })
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Test')
+  await page.getByRole('textbox', { name: 'Surname', exact: true }).fill('Player')
   await page.getByLabel('Date of Birth').fill('2010-05-10')
   await page.getByLabel('Gender').selectOption({ label: 'Female' })
   await page.getByLabel('ID/Passport').fill(validSaId(Date.now(), '2010-05-10', 'Female'))
+  await expect(page.getByText(/Valid SA ID/)).toBeVisible()
   await expect(page.getByText('Eligible Age Groups')).toBeVisible()
   await expect(page.getByLabel('Age Group (auto-suggested)')).toBeVisible()
   await page.getByLabel('POPIA consent').check()
   await page.getByRole('button', { name: 'Submit Player Registration' }).click()
   await expect(page.getByText(/Congratulations! Your player registration has been submitted/i)).toBeVisible()
-})
-
-test('Dashboard shows records after submissions', async ({ page, request }) => {
-  const email = `e2e.admin.${Date.now()}@example.com`
-  await ensureAdmin(request, email, 'SchoolAdmin', '1', 'S1')
-  await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  const loginForm = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm.getByLabel('Email').fill(email)
-  await loginForm.getByLabel('Password').fill('secret123')
-  await loginForm.getByRole('button', { name: 'Sign In' }).click()
-  await page.getByTestId('btn-dashboard').click()
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
-})
-
-test('Login as EPHSRUAdmin shows audit logs', async ({ page, request }) => {
-  const email = `e2e.super.${Date.now()}@example.com`
-  await ensureAdmin(request, email, 'EPHSRUAdmin')
-  await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  const loginForm = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm.getByLabel('Email').fill(email)
-  await loginForm.getByLabel('Password').fill('secret123')
-  await loginForm.getByRole('button', { name: 'Sign In' }).click()
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  await page.goto('http://localhost:5173/')
-  await expect(page.getByText('Audit Logs')).toBeVisible()
-})
-test('Coach submits player and sees on dashboard', async ({ page, request }) => {
-  const email = `e2e.coach.${Date.now()}@example.com`
-  await ensureCoach(request, email, '1', 'S1')
-  await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  const loginForm = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm.getByLabel('Email').fill(email)
-  await loginForm.getByLabel('Password').fill('secret123')
-  await loginForm.getByRole('button', { name: 'Sign In' }).click()
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  await page.goto('http://localhost:5173/')
-  const registerSection = page.locator('section:has(h1:has-text("Register"))')
-  await registerSection.getByLabel('Email').fill(`e2e.player.${Date.now()}@example.com`)
-  await registerSection.getByLabel('Create Password').fill('secret123')
-  await registerSection.getByLabel('Verify Password').fill('secret123')
-  await registerSection.getByLabel('Select registration form').selectOption({ value: 'player' })
-  await registerSection.getByRole('button', { name: 'Continue' }).click()
-  await page.getByTestId('zone-select').selectOption({ index: 1 })
-  await page.getByTestId('school-select').selectOption({ index: 1 })
-  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Test')
-  await page.getByRole('textbox', { name: 'Surname', exact: true }).fill('Player')
-  await page.getByLabel('ID/Passport').fill(validSaId(Date.now(), '2010-01-01', 'Male'))
-  await page.getByLabel('Date of Birth').fill('2010-01-01')
-  await page.getByLabel('Gender').selectOption({ label: 'Male' })
-  await page.getByLabel('POPIA consent').check()
-  page.once('dialog', (d) => d.accept())
-  await page.getByRole('button', { name: 'Submit Player Registration' }).click()
   await page.getByRole('button', { name: 'View Player Dashboard' }).click()
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
 })
-test('Approvals page loads for SchoolAdmin role', async ({ page, request }) => {
-  const email = `e2e.schooladmin.${Date.now()}@example.com`
+
+test('SchoolAdmin lands on the dashboard after sign-in', async ({ page, request }) => {
+  const email = `e2e.admin.${Date.now()}@example.com`
   await ensureAdmin(request, email, 'SchoolAdmin', '1', 'S1')
-  await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  const loginForm = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm.getByLabel('Email').fill(email)
-  await loginForm.getByLabel('Password').fill('secret123')
-  await loginForm.getByRole('button', { name: 'Sign In' }).click()
-  await page.getByTestId('btn-dashboard').click()
-  await page.getByTestId('btn-approvals').click()
-  await page.waitForSelector('h1:text("Approvals")')
-  await expect(page.locator('h1').filter({ hasText: 'Approvals' }).first()).toBeVisible()
-})
-test('Nav gating hides Approvals and Reports for Coach', async ({ page, request }) => {
-  const email = `e2e.coach.${Date.now()}@example.com`
-  await ensureCoach(request, email, '1', 'S1')
-  await page.goto('/')
-  const loginForm = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm.getByLabel('Email').fill(email)
-  await loginForm.getByLabel('Password').fill('secret123')
-  await loginForm.getByRole('button', { name: 'Sign In' }).click()
-  await page.goto('http://localhost:5173/')
-  await expect(page.getByTestId('btn-approvals')).toHaveCount(0)
-  await expect(page.getByTestId('btn-reports')).toHaveCount(0)
+  await uiLogin(page, email)
 })
 
-test('Nav gating shows Approvals for SchoolAdmin and Reports for ZoneCoordinator', async ({ page, request }) => {
-  const email1 = `e2e.schooladmin.${Date.now()}@example.com`
-  const email2 = `e2e.zone.${Date.now()}@example.com`
-  await ensureAdmin(request, email1, 'SchoolAdmin', '1', 'S1')
-  await ensureAdmin(request, email2, 'ZoneCoordinator')
-  await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  const loginForm = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm.getByLabel('Email').fill(email1)
-  await loginForm.getByLabel('Password').fill('secret123')
-  await loginForm.getByRole('button', { name: 'Sign In' }).click()
-  await page.getByTestId('btn-dashboard').click()
-  await expect(page.getByTestId('btn-approvals')).toBeVisible()
-  await expect(page.getByTestId('btn-reports')).toHaveCount(0)
-  await page.getByTestId('btn-login').click()
-  const loginForm2 = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm2.getByLabel('Email').fill(email2)
-  await loginForm2.getByLabel('Password').fill('secret123')
-  await loginForm2.getByRole('button', { name: 'Sign In' }).click()
-  await page.getByTestId('btn-dashboard').click()
-  await expect(page.getByTestId('btn-reports')).toBeVisible()
-})
-test.skip('Unauthorized navigation blocked for Coach to School registration (no button)', async () => {})
-
-test('SchoolAdmin can submit school registration with updated information', async ({ page, request }) => {
-  const email = `e2e.schooladmin.${Date.now()}@example.com`
-  await ensureAdmin(request, email, 'SchoolAdmin', '1', 'S1')
-  await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  const loginForm = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm.getByLabel('Email').fill(email)
-  await loginForm.getByLabel('Password').fill('secret123')
-  await loginForm.getByRole('button', { name: 'Sign In' }).click()
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  await page.goto('http://localhost:5173/')
-  const registerSection2 = page.locator('section:has(h1:has-text("Register"))')
-  await registerSection2.getByLabel('Email').fill(`e2e.school.${Date.now()}@example.com`)
-  await registerSection2.getByLabel('Create Password').fill('secret123')
-  await registerSection2.getByLabel('Verify Password').fill('secret123')
-  await registerSection2.getByLabel('Select registration form').selectOption({ value: 'school' })
-  await registerSection2.getByRole('button', { name: 'Continue' }).click()
-  await page.getByTestId('zone-select').selectOption({ index: 1 })
-  await page.getByTestId('school-select').selectOption({ index: 1 })
-  await page.getByLabel('School Physical Address').fill('123 Updated Street')
-  await page.getByLabel('School Contact Number').fill('0821234567')
-  await page.getByLabel('School Email Address').fill('updated@school.co.za')
-  await page.getByRole('button', { name: 'Submit School Registration' }).click()
-  await expect(page.getByText(/CONGRATULATIONS !!!/i)).toBeVisible()
+test('EPHSRUAdmin sees audit logs', async ({ page, request }) => {
+  const email = `e2e.super.${Date.now()}@example.com`
+  await ensureAdmin(request, email, 'EPHSRUAdmin')
+  await uiLogin(page, email)
+  await expect(page.getByText('Audit Logs')).toBeVisible()
 })
 
-test('Coach can submit player registration with updated information', async ({ page, request }) => {
-  const email = `e2e.coach.${Date.now()}@example.com`
-  await ensureCoach(request, email, '1', 'S1')
-  await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  const loginForm = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm.getByLabel('Email').fill(email)
-  await loginForm.getByLabel('Password').fill('secret123')
-  await loginForm.getByRole('button', { name: 'Sign In' }).click()
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  await page.goto('http://localhost:5173/')
-  const registerSection3 = page.locator('section:has(h1:has-text("Register"))')
-  await registerSection3.getByLabel('Email').fill(`e2e.player.${Date.now()}@example.com`)
-  await registerSection3.getByLabel('Create Password').fill('secret123')
-  await registerSection3.getByLabel('Verify Password').fill('secret123')
-  await registerSection3.getByLabel('Select registration form').selectOption({ value: 'player' })
-  await registerSection3.getByRole('button', { name: 'Continue' }).click()
-  await page.getByTestId('zone-select').selectOption({ index: 1 })
-  await page.getByTestId('school-select').selectOption({ index: 1 })
-  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Test Player')
-  await page.getByRole('textbox', { name: 'Surname', exact: true }).fill('Update Test')
-  await page.getByLabel('ID/Passport').fill(validSaId(Date.now(), '2010-01-01', 'Male'))
-  await page.getByLabel('Date of Birth').fill('2010-01-01')
-  await page.getByLabel('Gender').selectOption({ label: 'Male' })
-  await page.getByLabel('POPIA consent').check()
-  await page.getByRole('button', { name: 'Submit Player Registration' }).click()
-  await expect(page.getByText(/Congratulations! Your player registration has been submitted/i)).toBeVisible()
+test('Create User type list is scoped by role', async ({ page, request }) => {
+  // Coach: players only
+  const coachEmail = `e2e.coach.${Date.now()}@example.com`
+  await ensureCoach(request, coachEmail, '1', 'S1')
+  await uiLogin(page, coachEmail)
+  await page.getByTestId('btn-create-user').click()
+  const coachOptions = page.getByLabel('Select user type to create').locator('option')
+  await expect(coachOptions).toHaveCount(1)
+  await expect(coachOptions.first()).toHaveText('Player Registration')
+
+  // SchoolAdmin: coaches, referees and players — but no admins
+  const saEmail = `e2e.sa.${Date.now()}@example.com`
+  await ensureAdmin(request, saEmail, 'SchoolAdmin', '1', 'S1')
+  await uiLogin(page, saEmail)
+  await page.getByTestId('btn-create-user').click()
+  const saSelect = page.getByLabel('Select user type to create')
+  await expect(saSelect.locator('option')).toHaveCount(3)
+  await expect(saSelect.locator('option[value="admin"]')).toHaveCount(0)
 })
 
-test('SchoolAdmin cannot submit school registration outside their scope', async ({ page, request }) => {
-  const email = `e2e.schooladmin.${Date.now()}@example.com`
-  await ensureAdmin(request, email, 'SchoolAdmin', '1', 'S1')
-  await page.goto('http://localhost:5173/')
-  await page.evaluate(() => { try { localStorage.removeItem('nav:target') } catch {} })
-  const loginForm = page.locator('form:has(button:has-text("Sign In"))')
-  await loginForm.getByLabel('Email').fill(email)
-  await loginForm.getByLabel('Password').fill('secret123')
-  await loginForm.getByRole('button', { name: 'Sign In' }).click()
-  await page.getByTestId('btn-home').click()
-  const registerSection4 = page.locator('section:has(h1:has-text("Register"))')
-  await registerSection4.getByLabel('Email').fill(`e2e.school.${Date.now()}@example.com`)
-  await registerSection4.getByLabel('Create Password').fill('secret123')
-  await registerSection4.getByLabel('Verify Password').fill('secret123')
-  await registerSection4.getByLabel('Select registration form').selectOption({ value: 'school' })
-  await registerSection4.getByRole('button', { name: 'Continue' }).click()
-  await page.getByTestId('zone-select').selectOption({ index: 2 })
-  await page.getByTestId('school-select').selectOption({ index: 1 })
-  await page.getByLabel('School Physical Address').fill('123 Unauthorized Street')
-  await page.getByRole('button', { name: 'Submit School Registration' }).click()
-  await page.waitForTimeout(1000)
+test('Server blocks privilege escalation: SchoolAdmin cannot create admins', async ({ request }) => {
+  const tokenRes = await request.post('http://localhost:4000/api/login', { data: { role: 'SchoolAdmin', zoneId: '1', schoolId: 'S1' }, headers: { 'Content-Type': 'application/json' } })
+  const { token } = await tokenRes.json()
+  const res = await request.post('http://localhost:4000/api/admins', {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    data: { name: 'No', surname: 'Escalation', role: 'SchoolAdmin', zoneId: '1', schoolId: 'S1', email: `e2e.escalate.${Date.now()}@example.com` },
+  })
+  expect(res.status()).toBe(403)
+  expect((await res.json()).error).toBe('forbidden')
 })

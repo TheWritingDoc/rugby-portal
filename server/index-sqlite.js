@@ -2364,6 +2364,156 @@ app.post('/api/notifications/read-all', (req, res) => {
   })
 })
 
+// ===========================================================================
+// Scoped messaging — communication follows the reporting hierarchy. Each role
+// may only message its direct superior(s) and direct report(s):
+//   EPHSRUAdmin     <-> ZoneCoordinators (all zones)
+//   ZoneCoordinator <-> EPHSRUAdmins; SchoolAdmins in own zone
+//   SchoolAdmin     <-> ZoneCoordinators of own zone; Coaches & Referees of own school
+//   Coach           <-> SchoolAdmins of own school; Players of own school
+//   Player          <-> Coaches of own school
+//   Referee         <-> SchoolAdmins of own school (or own zone's coordinators)
+// Replying to someone who already messaged you is always allowed, so a
+// conversation started from above can be answered from below.
+// ===========================================================================
+function dbAllP(sql, params) {
+  return new Promise((resolve, reject) => db.all(sql, params, (e, r) => (e ? reject(e) : resolve(r || []))))
+}
+function safeParse(s) { try { return JSON.parse(s || '{}') } catch { return {} } }
+
+// Tokens issued by the legacy dev login may lack zone/school scope — fall back
+// to the user's own row (matched by email) so messaging scope is always real.
+async function resolveMsgScope(user) {
+  let zoneId = user.zoneId
+  let schoolId = user.schoolId
+  const role = user.role
+  const email = String(user.email || '').trim().toLowerCase()
+  const needsSchool = role === 'Coach' || role === 'Player' || role === 'SchoolAdmin' || role === 'Referee'
+  if ((needsSchool && schoolId) || (!needsSchool && zoneId) || role === 'EPHSRUAdmin') {
+    if (zoneId || schoolId || role === 'EPHSRUAdmin') return { role, zoneId, schoolId }
+  }
+  const table = role === 'Coach' ? 'coaches' : role === 'Player' ? 'players' : role === 'Referee' ? 'referees' : 'admins'
+  const rows = email ? await dbAllP(`SELECT * FROM ${table} WHERE lower(email) = ?`, [email]) : []
+  const r = rows[0]
+  if (r) {
+    const d = safeParse(r.data)
+    zoneId = zoneId || r.zoneId || d.zoneId
+    schoolId = schoolId || r.schoolId || d.schoolId
+  }
+  return { role, zoneId, schoolId }
+}
+
+async function allowedRecipients(user) {
+  const scope = await resolveMsgScope(user)
+  const me = String(user.email || '').trim().toLowerCase()
+  const out = []
+  const push = (rows, fixedRole) => {
+    for (const r of rows) {
+      const d = safeParse(r.data)
+      const email = String(r.email || d.email || '').trim().toLowerCase()
+      if (!email || email === me) continue
+      out.push({
+        email,
+        name: `${r.name || d.name || ''} ${r.surname || d.surname || ''}`.trim() || email,
+        role: fixedRole || r.role || 'User',
+        schoolId: r.schoolId || d.schoolId || '',
+        zoneId: r.zoneId || d.zoneId || '',
+      })
+    }
+  }
+  if (scope.role === 'EPHSRUAdmin') {
+    push(await dbAllP(`SELECT * FROM admins WHERE role = 'ZoneCoordinator'`, []))
+  } else if (scope.role === 'ZoneCoordinator') {
+    push(await dbAllP(`SELECT * FROM admins WHERE role = 'EPHSRUAdmin'`, []))
+    if (scope.zoneId) push(await dbAllP(`SELECT * FROM admins WHERE role = 'SchoolAdmin' AND zoneId = ?`, [String(scope.zoneId)]))
+  } else if (scope.role === 'SchoolAdmin') {
+    if (scope.zoneId) push(await dbAllP(`SELECT * FROM admins WHERE role = 'ZoneCoordinator' AND zoneId = ?`, [String(scope.zoneId)]))
+    if (scope.schoolId) {
+      push(await dbAllP('SELECT * FROM coaches WHERE schoolId = ?', [String(scope.schoolId)]), 'Coach')
+      const refs = await dbAllP('SELECT * FROM referees', [])
+      push(refs.filter((r) => String(safeParse(r.data).schoolId || '') === String(scope.schoolId)), 'Referee')
+    }
+  } else if (scope.role === 'Coach') {
+    if (scope.schoolId) {
+      push(await dbAllP(`SELECT * FROM admins WHERE role = 'SchoolAdmin' AND schoolId = ?`, [String(scope.schoolId)]))
+      push(await dbAllP('SELECT * FROM players WHERE schoolId = ? LIMIT 1000', [String(scope.schoolId)]), 'Player')
+    }
+  } else if (scope.role === 'Player') {
+    if (scope.schoolId) push(await dbAllP('SELECT * FROM coaches WHERE schoolId = ?', [String(scope.schoolId)]), 'Coach')
+  } else if (scope.role === 'Referee') {
+    if (scope.schoolId) push(await dbAllP(`SELECT * FROM admins WHERE role = 'SchoolAdmin' AND schoolId = ?`, [String(scope.schoolId)]))
+    else if (scope.zoneId) push(await dbAllP(`SELECT * FROM admins WHERE role = 'ZoneCoordinator' AND zoneId = ?`, [String(scope.zoneId)]))
+  }
+  // Dedupe by email (a person can appear in several tables)
+  const seen = new Set()
+  return out.filter((r) => (seen.has(r.email) ? false : (seen.add(r.email), true)))
+}
+
+// Directory of people the current user is allowed to message
+app.get('/api/messages/recipients', async (req, res) => {
+  if (!req.user?.role || !req.user?.email) return res.status(403).json({ error: 'forbidden' })
+  try {
+    res.json(await allowedRecipients(req.user))
+  } catch (e) {
+    res.status(500).json({ error: e?.message || 'internal_error' })
+  }
+})
+
+// Own conversations: inbox + sent
+app.get('/api/messages', (req, res) => {
+  const email = String(req.user?.email || '').trim().toLowerCase()
+  if (!req.user?.role || !email) return res.status(403).json({ error: 'forbidden' })
+  db.all('SELECT * FROM messages WHERE toEmail = ? ORDER BY createdAt DESC LIMIT 100', [email], (e1, inbox) => {
+    if (e1) return res.status(500).json({ error: e1.message })
+    db.all('SELECT * FROM messages WHERE fromEmail = ? ORDER BY createdAt DESC LIMIT 100', [email], (e2, sent) => {
+      if (e2) return res.status(500).json({ error: e2.message })
+      res.json({ inbox: inbox || [], sent: sent || [] })
+    })
+  })
+})
+
+app.post('/api/messages', async (req, res) => {
+  const email = String(req.user?.email || '').trim().toLowerCase()
+  if (!req.user?.role || !email) return res.status(403).json({ error: 'forbidden' })
+  const toEmail = String(req.body?.toEmail || '').trim().toLowerCase()
+  const subject = String(req.body?.subject || '').slice(0, 200)
+  const body = String(req.body?.body || '').trim().slice(0, 4000)
+  if (!toEmail || !body) return res.status(400).json({ error: 'recipient_and_body_required' })
+  try {
+    const allowed = await allowedRecipients(req.user)
+    let ok = allowed.some((r) => r.email === toEmail)
+    if (!ok) {
+      // Replies are always allowed: if they messaged me before, I may answer.
+      const prior = await dbAllP('SELECT id FROM messages WHERE fromEmail = ? AND toEmail = ? LIMIT 1', [toEmail, email])
+      ok = prior.length > 0
+    }
+    if (!ok) return res.status(403).json({ error: 'recipient_out_of_scope' })
+    const id = crypto.randomUUID()
+    const fromName = String(req.body?.fromName || '').slice(0, 120)
+    db.run(
+      'INSERT INTO messages (id, fromEmail, fromRole, fromName, toEmail, subject, body, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, email, req.user.role, fromName, toEmail, subject, body, Date.now()],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message })
+        queueNotification(toEmail, `New message from ${fromName || email}`, subject || body.slice(0, 140))
+        writeAudit(req.user?.role, 'messages', 'send', null, { id, toEmail })
+        res.json({ ok: true, id })
+      }
+    )
+  } catch (e) {
+    res.status(500).json({ error: e?.message || 'internal_error' })
+  }
+})
+
+app.post('/api/messages/read-all', (req, res) => {
+  const email = String(req.user?.email || '').trim().toLowerCase()
+  if (!req.user?.role || !email) return res.status(403).json({ error: 'forbidden' })
+  db.run('UPDATE messages SET readAt = ? WHERE toEmail = ? AND readAt IS NULL', [Date.now(), email], function (err) {
+    if (err) return res.status(500).json({ error: err.message })
+    res.json({ ok: true, marked: this.changes })
+  })
+})
+
 // In production the API server also serves the built frontend (single deployable unit)
 const distDir = path.join(process.cwd(), 'dist')
 if ((process.env.NODE_ENV || 'development') === 'production' && fs.existsSync(distDir)) {

@@ -24,6 +24,7 @@ import SchoolAdminDashboard from '../components/dashboards/SchoolAdminDashboard'
 import ZoneCoordinatorDashboard from '../components/dashboards/ZoneCoordinatorDashboard'
 import EPHSRUAdminDashboard from '../components/dashboards/EPHSRUAdminDashboard'
 import SeasonFilter from '../components/SeasonFilter'
+import Messages from '../components/Messages'
 import { currentSeasonYear, filterBySeason, seasonsPresent, archivedCount, seasonYearOf } from '../utils/season'
 import { schoolNameOf, zoneNameOf } from '../utils/labels'
 import { resizeImage } from '../utils/image'
@@ -160,6 +161,7 @@ export default function Dashboard({ role }: { role: Role }) {
       {(role === 'Coach' || role === 'SchoolAdmin' || role === 'Player') && schoolNameTop && (
         <h1 className="mb-3 text-xl font-bold">{schoolNameTop}</h1>
       )}
+      <Messages />
       {role === 'Player' ? (
         <PlayerView players={players} />
       ) : role === 'Coach' ? (

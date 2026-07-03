@@ -298,6 +298,24 @@ db.serialize(() => {
   `)
   db.run(`CREATE INDEX IF NOT EXISTS idx_notifications_email ON notifications(email, createdAt)`)
 
+  // In-app messages between users. Who may message whom is enforced by the
+  // hierarchy rules in the API layer (see /api/messages in index-sqlite.js).
+  db.run(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      fromEmail TEXT NOT NULL,
+      fromRole TEXT,
+      fromName TEXT,
+      toEmail TEXT NOT NULL,
+      subject TEXT,
+      body TEXT NOT NULL,
+      readAt INTEGER,
+      createdAt INTEGER NOT NULL
+    )
+  `)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(toEmail, createdAt)`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(fromEmail, createdAt)`)
+
   // Create indexes for performance
   db.run(`CREATE INDEX IF NOT EXISTS idx_approvals_entity ON approvals(entityType, entityId)`)
   db.run(`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status)`)

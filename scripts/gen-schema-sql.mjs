@@ -75,10 +75,17 @@ CREATE TABLE IF NOT EXISTS notifications (
   id TEXT PRIMARY KEY, email TEXT NOT NULL, subject TEXT NOT NULL,
   message TEXT, readAt BIGINT, createdAt BIGINT NOT NULL);
 
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY, fromEmail TEXT NOT NULL, fromRole TEXT, fromName TEXT,
+  toEmail TEXT NOT NULL, subject TEXT, body TEXT NOT NULL,
+  readAt BIGINT, createdAt BIGINT NOT NULL);
+
 CREATE INDEX IF NOT EXISTS ix_migration_requests_status ON migration_requests(status);
 CREATE INDEX IF NOT EXISTS ix_migration_requests_toschoolid_status ON migration_requests(toSchoolId, status);
 CREATE INDEX IF NOT EXISTS ix_migration_requests_playerid ON migration_requests(playerId);
 CREATE INDEX IF NOT EXISTS idx_notifications_email ON notifications(email, createdAt);
+CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(toEmail, createdAt);
+CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(fromEmail, createdAt);
 CREATE INDEX IF NOT EXISTS idx_approvals_entity ON approvals(entityType, entityId);
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
 CREATE INDEX IF NOT EXISTS idx_migrations_player ON migrations(playerId, migrationDate);

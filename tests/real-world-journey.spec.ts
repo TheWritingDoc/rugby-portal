@@ -92,16 +92,18 @@ test.describe('Real-world journeys across all roles', () => {
     await ctx.dispose()
   })
 
-  test('1. Player self-registers through the public form with a profile photo', async ({ page }) => {
-    await page.goto(APP)
-    await page.evaluate(() => { try { localStorage.clear() } catch {} })
-    await page.reload()
+  test('1. Coach creates the player through the delegated Create User flow (with profile photo)', async ({ page }) => {
+    // Public self-registration was replaced by hierarchical delegation:
+    // the player's coach signs in and creates the account for them.
+    await uiLogin(page, coachA.email)
+    await page.getByTestId('btn-create-user').click()
 
-    // Register panel (right of the sign-in form)
-    await page.getByLabel('Email', { exact: true }).last().fill(player.email)
+    // Coaches may only create players — the type list is scoped by role
+    const typeSelect = page.getByLabel('Select user type to create')
+    await expect(typeSelect.locator('option')).toHaveCount(1)
+    await page.getByLabel('Email', { exact: true }).fill(player.email)
     await page.getByLabel('Create Password').fill(PASSWORD)
     await page.getByLabel('Verify Password').fill(PASSWORD)
-    await page.getByLabel('Select registration form').selectOption('player')
     await page.getByTestId('btn-player').click()
 
     // Player registration form
@@ -271,9 +273,8 @@ test.describe('Real-world journeys across all roles', () => {
     // Season filter defaults to the current year
     await expect(page.getByTestId('season-filter')).toBeVisible()
     await expect(page.getByTestId('season-filter').getByText(`Season ${new Date().getFullYear()}`)).toBeVisible()
-    // School admins approve but do not see union reports
-    await expect(page.getByTestId('btn-approvals')).toBeVisible()
-    await expect(page.getByTestId('btn-reports')).toHaveCount(0)
+    // School admins can delegate user creation (coaches/referees/players)
+    await expect(page.getByTestId('btn-create-user')).toBeVisible()
 
     // Add a coach with qualification details
     await page.getByRole('button', { name: 'Coaches' }).click()
@@ -309,9 +310,8 @@ test.describe('Real-world journeys across all roles', () => {
     await expect(page.getByText('Zone Administration')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Uitenhage Zone' })).toBeVisible()
     await expect(page.getByText(`Coordinator: ${zoneCoord.name} ${zoneCoord.surname}`)).toBeVisible()
-    // In the approval chain: sees both Reports and Approvals
-    await expect(page.getByTestId('btn-approvals')).toBeVisible()
-    await expect(page.getByTestId('btn-reports')).toBeVisible()
+    // Can delegate user creation (school admins / schools)
+    await expect(page.getByTestId('btn-create-user')).toBeVisible()
     // Zone-2 data is invisible to a zone-1 coordinator
     await expect(page.getByText(isoPlayer.surname)).toHaveCount(0)
   })
@@ -320,8 +320,8 @@ test.describe('Real-world journeys across all roles', () => {
     await uiLogin(page, refereeU.email, 'pw')
     await expect(page.getByText('Referee Dashboard')).toBeVisible()
     await expect(page.getByText(`${refereeU.name} ${refereeU.surname}`).first()).toBeVisible()
-    await expect(page.getByTestId('btn-approvals')).toHaveCount(0)
-    await expect(page.getByTestId('btn-reports')).toHaveCount(0)
+    // Referees are leaf nodes in the hierarchy — they cannot create users
+    await expect(page.getByTestId('btn-create-user')).toHaveCount(0)
   })
 
   test('8. EPHSRU admin oversees the whole province with audit logs', async ({ page }) => {
@@ -329,8 +329,7 @@ test.describe('Real-world journeys across all roles', () => {
     await expect(page.getByText('System Administration')).toBeVisible()
     await expect(page.getByText('EPHSRU Dashboard')).toBeVisible()
     await expect(page.getByText('Audit Logs')).toBeVisible()
-    await expect(page.getByTestId('btn-approvals')).toBeVisible()
-    await expect(page.getByTestId('btn-reports')).toBeVisible()
+    await expect(page.getByTestId('btn-create-user')).toBeVisible()
     // Season filter is present for the union admin too
     await expect(page.getByTestId('season-filter')).toBeVisible()
   })
