@@ -59,11 +59,16 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
     // back to a self-registration token when nobody is logged in.
     if (!getToken()) await login('Referee', zone)
     const ok = await safePost('referees', payload)
-    if (!ok) addEntity('Referee', payload)
+    if (!ok) {
+      addEntity('Referee', payload)
+      return notifyError('Could not create the referee — check the zone is within your authority.')
+    }
     addAudit({ id: crypto.randomUUID(), userRole: role || 'SchoolAdmin', entity: 'Referee', action: 'create', after: { name, surname, zone }, ts: Date.now() })
     clearDraft('referee')
     try { localStorage.removeItem('reg:email'); localStorage.removeItem('reg:password') } catch {}
-    notifySuccess('Referee registration submitted')
+    notifySuccess(`Referee account created${email ? ` for ${email}` : ''} — they can sign in now.`)
+    // Close the form and return to the dashboard automatically
+    window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'dashboard' }))
   }
   return (
     <form className="space-y-3" onSubmit={submit}>

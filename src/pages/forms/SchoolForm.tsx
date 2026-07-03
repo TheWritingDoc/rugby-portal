@@ -40,12 +40,23 @@ export default function SchoolForm({ role }: { role?: 'Player' | 'Referee' | 'Co
     if (contactNumber && !isPhoneZA(contactNumber)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
     const passwordHash = password ? bcrypt.hashSync(password, 10) : undefined
     const payload = { zoneId: zone, schoolId: school, address, contactNumber, email, passwordHash, logoUrl }
-    await login('SchoolAdmin', zone, school)
+    // Keep the creator's session (zone coordinator / union admin stays signed in)
+    const delegated = Boolean(localStorage.getItem('auth:token'))
+    if (!delegated) await login('SchoolAdmin', zone, school)
     const ok = await safePost('schools', payload)
-    if (!ok) addEntity('School', payload)
+    if (!ok) {
+      addEntity('School', payload)
+      return notifyError('Could not register the school — check the zone is within your authority.')
+    }
     addAudit({ id: crypto.randomUUID(), userRole: 'SchoolAdmin', entity: 'School', action: 'create', after: { zone, school }, ts: Date.now() })
     clearDraft('school')
-    setSubmitted(true)
+    try { localStorage.removeItem('reg:email'); localStorage.removeItem('reg:password') } catch {}
+    if (delegated) {
+      notifySuccess('School registered — it is now on the union register.')
+      window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'dashboard' }))
+    } else {
+      setSubmitted(true)
+    }
   }
   return (
     <form className="space-y-3" onSubmit={submit}>

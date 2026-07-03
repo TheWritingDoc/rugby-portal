@@ -16,6 +16,7 @@ import RefereeCard from '../RefereeCard'
 import CoachCard from '../CoachCard'
 import { zoneNameOf } from '../../utils/labels'
 import PlayerProfileModal from '../modals/PlayerProfileModal'
+import StaffProfileModal from '../modals/StaffProfileModal'
 
 interface ZoneCoordinatorDashboardProps {
   zone?: string
@@ -23,22 +24,25 @@ interface ZoneCoordinatorDashboardProps {
   players: any[]
   coaches: any[]
   referees: any[]
+  admins?: any[]
   onRefresh: () => void
 }
 
-export default function ZoneCoordinatorDashboard({ 
-  zone, 
-  schools, 
-  players, 
-  coaches, 
+export default function ZoneCoordinatorDashboard({
+  zone,
+  schools,
+  players,
+  coaches,
   referees,
-  onRefresh 
+  admins = [],
+  onRefresh
 }: ZoneCoordinatorDashboardProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'schools' | 'referees' | 'requests'>('overview')
   const [searchQuery, setSearchQuery] = useState('')
   const [showAddReferee, setShowAddReferee] = useState(false)
   const [selectedSchool, setSelectedSchool] = useState<any | null>(null)
   const [viewingPlayer, setViewingPlayer] = useState<any | null>(null)
+  const [viewingStaff, setViewingStaff] = useState<{ person: any; role: 'Coach' | 'Referee' | 'SchoolAdmin' } | null>(null)
   const [assigningReferee, setAssigningReferee] = useState<any | null>(null)
   
   // School Registration
@@ -224,6 +228,59 @@ export default function ZoneCoordinatorDashboard({
             </div>
           </div>
 
+          {/* Everyone attached to this school: admins, referees, coaches, players */}
+          {(() => {
+            const schoolAdminsHere = admins.filter((a) => (a.role === 'SchoolAdmin' || a.data?.role === 'SchoolAdmin') && String(a.data?.schoolId || a.schoolId || '') === String(selectedSchool.id))
+            const schoolRefereesHere = referees.filter((r) => String(r.data?.schoolId || '') === String(selectedSchool.id))
+            if (schoolAdminsHere.length === 0 && schoolRefereesHere.length === 0) return null
+            return (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                {schoolAdminsHere.length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                      <Shield className="h-5 w-5 text-blue-600" /> School Admins
+                    </h3>
+                    <div className="space-y-2">
+                      {schoolAdminsHere.map((a) => (
+                        <button key={a.id} type="button" onClick={() => setViewingStaff({ person: a, role: 'SchoolAdmin' })}
+                          className="flex w-full items-center gap-3 rounded-lg border bg-blue-50 border-blue-100 p-3 text-left hover:bg-blue-100 transition-colors">
+                          <div className="h-10 w-10 shrink-0 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold">
+                            {(a.data?.name?.[0] || '')}{(a.data?.surname?.[0] || '')}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-medium text-gray-900 truncate">{a.data?.name} {a.data?.surname}</div>
+                            <div className="text-xs text-gray-500 truncate">{a.data?.email || a.email}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {schoolRefereesHere.length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                      <Award className="h-5 w-5 text-amber-600" /> Referees
+                    </h3>
+                    <div className="space-y-2">
+                      {schoolRefereesHere.map((r) => (
+                        <button key={r.id} type="button" onClick={() => setViewingStaff({ person: r, role: 'Referee' })}
+                          className="flex w-full items-center gap-3 rounded-lg border bg-amber-50 border-amber-100 p-3 text-left hover:bg-amber-100 transition-colors">
+                          <div className="h-10 w-10 shrink-0 rounded-full bg-amber-200 flex items-center justify-center text-amber-700 font-bold">
+                            {(r.data?.name?.[0] || r.name?.[0] || '')}{(r.data?.surname?.[0] || r.surname?.[0] || '')}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-medium text-gray-900 truncate">{r.data?.name || r.name} {r.data?.surname || r.surname}</div>
+                            <div className="text-xs text-gray-500 truncate">{r.qualifications || r.data?.refereeLevel || 'Referee'}{r.data?.email || r.email ? ` • ${r.data?.email || r.email}` : ''}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div>
               <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
@@ -231,7 +288,9 @@ export default function ZoneCoordinatorDashboard({
               </h3>
               <div className="space-y-3">
                 {schoolCoaches.map(coach => (
-                  <CoachCard key={coach.id} coach={coach} />
+                  <div key={coach.id} onClick={() => setViewingStaff({ person: coach, role: 'Coach' })} className="cursor-pointer" title="View coach profile">
+                    <CoachCard coach={coach} />
+                  </div>
                 ))}
                 {schoolCoaches.length === 0 && <p className="text-gray-500 italic">No coaches assigned</p>}
               </div>
@@ -243,9 +302,9 @@ export default function ZoneCoordinatorDashboard({
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {schoolPlayers.map(player => (
-                  <PlayerCard 
-                    key={player.id} 
-                    player={player} 
+                  <PlayerCard
+                    key={player.id}
+                    player={player}
                     badge={player.data?.team || player.data?.ageGroup || '—'}
                     onClick={() => setViewingPlayer(player)}
                   />
@@ -263,6 +322,9 @@ export default function ZoneCoordinatorDashboard({
             onClose={() => setViewingPlayer(null)}
             onUpdated={() => onRefresh()}
           />
+        )}
+        {viewingStaff && (
+          <StaffProfileModal person={viewingStaff.person} role={viewingStaff.role} onClose={() => setViewingStaff(null)} />
         )}
       </div>
     )
@@ -536,8 +598,14 @@ export default function ZoneCoordinatorDashboard({
               {filteredReferees.map((r) => (
                 <div key={r.id} className="relative group">
                   <RefereeCard referee={r} badge={r.data?.schoolId ? 'Assigned' : 'Unassigned'} />
-                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center rounded-2xl transition-opacity">
-                    <button 
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 rounded-2xl transition-opacity">
+                    <button
+                      onClick={() => setViewingStaff({ person: r, role: 'Referee' })}
+                      className="bg-white text-gray-700 px-4 py-2 rounded-full font-bold shadow-lg hover:bg-gray-50"
+                    >
+                      View Profile
+                    </button>
+                    <button
                       onClick={() => setAssigningReferee(r)}
                       className="bg-white text-emerald-600 px-4 py-2 rounded-full font-bold shadow-lg hover:bg-emerald-50"
                     >
@@ -719,6 +787,9 @@ export default function ZoneCoordinatorDashboard({
           onClose={() => setViewingPlayer(null)}
           onUpdated={() => onRefresh()}
         />
+      )}
+      {viewingStaff && (
+        <StaffProfileModal person={viewingStaff.person} role={viewingStaff.role} onClose={() => setViewingStaff(null)} />
       )}
     </div>
   )

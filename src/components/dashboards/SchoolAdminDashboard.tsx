@@ -6,7 +6,7 @@ import {
   Download, Search, Plus, Edit, Trash2, Mail, Phone,
   BarChart3, PieChart as PieChartIcon,
   List as ListIcon, LayoutGrid, Folder, ChevronLeft,
-  CheckCircle, XCircle
+  CheckCircle, XCircle, Eye
 } from 'lucide-react'
 import { fetchList, postJson, putJson, deleteJson } from '../../utils/api'
 import { ensureSession } from '../../utils/auth'
@@ -20,6 +20,7 @@ import SchoolCard from '../SchoolCard'
 import CoachCard, { CoachAvatar } from '../CoachCard'
 import ExportMenu from '../ExportMenu'
 import PlayerProfileModal from '../modals/PlayerProfileModal'
+import StaffProfileModal from '../modals/StaffProfileModal'
 
 interface SchoolAdminDashboardProps {
   zone?: string
@@ -57,6 +58,7 @@ export default function SchoolAdminDashboard({
   })
   const [resultsSwitching, setResultsSwitching] = useState(false)
   const [viewingPlayer, setViewingPlayer] = useState<any>(null)
+  const [viewingStaff, setViewingStaff] = useState<{ person: any; role: 'Coach' | 'Referee' } | null>(null)
 
   useEffect(() => {
     try { localStorage.setItem('school:players:view', resultsView) } catch {}
@@ -1031,6 +1033,13 @@ export default function SchoolAdminDashboard({
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
+                      <button
+                        onClick={() => setViewingStaff({ person: coach, role: 'Coach' })}
+                        className="p-2 hover:bg-green-50 rounded-lg text-gray-400 hover:text-green-600"
+                        aria-label="View coach profile"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
                     </>
                   }
                 />
@@ -1050,6 +1059,39 @@ export default function SchoolAdminDashboard({
                 </button>
               )}
             </div>
+
+            {/* Referees attached to this school */}
+            {(() => {
+              const schoolRefs = referees.filter((r) => String(r.data?.schoolId || '') === String(school || ''))
+              if (schoolRefs.length === 0) return null
+              return (
+                <div className="mt-8">
+                  <h3 className="mb-3 flex items-center gap-2 text-lg font-semibold text-gray-900">
+                    <Award className="h-5 w-5 text-amber-600" /> Referees ({schoolRefs.length})
+                  </h3>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                    {schoolRefs.map((r) => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => setViewingStaff({ person: r, role: 'Referee' })}
+                        className="flex w-full items-center gap-3 rounded-lg border bg-amber-50 border-amber-100 p-3 text-left hover:bg-amber-100 transition-colors"
+                        title="View referee profile"
+                      >
+                        <div className="h-10 w-10 shrink-0 rounded-full bg-amber-200 flex items-center justify-center text-amber-700 font-bold">
+                          {(r.data?.name?.[0] || r.name?.[0] || '')}{(r.data?.surname?.[0] || r.surname?.[0] || '')}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-medium text-gray-900 truncate">{r.data?.name || r.name} {r.data?.surname || r.surname}</div>
+                          <div className="text-xs text-gray-500 truncate">{r.qualifications || r.data?.refereeLevel || 'Referee'}{(r.data?.email || r.email) ? ` • ${r.data?.email || r.email}` : ''}</div>
+                        </div>
+                        <Eye size={14} className="ml-auto shrink-0 text-amber-500" aria-hidden="true" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )}
 
@@ -1258,6 +1300,9 @@ export default function SchoolAdminDashboard({
           onClose={() => setViewingPlayer(null)}
           onUpdated={() => { onRefresh() }}
         />
+      )}
+      {viewingStaff && (
+        <StaffProfileModal person={viewingStaff.person} role={viewingStaff.role} onClose={() => setViewingStaff(null)} />
       )}
     </div>
   )

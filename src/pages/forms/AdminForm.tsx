@@ -6,8 +6,14 @@ import { addAudit } from '../../utils/audit'
 import { addEntity } from '../../utils/db'
 import { safePost } from '../../utils/api'
 import { loadDraft, saveDraft, clearDraft } from '../../utils/storage'
-import { login } from '../../utils/auth'
+import { login, getToken } from '../../utils/auth'
 import bcrypt from 'bcryptjs'
+
+const ROLE_LABELS: Record<string, string> = {
+  SchoolAdmin: 'School Admin',
+  ZoneCoordinator: 'Zone Coordinator',
+  EPHSRUAdmin: 'EPHSRU Admin',
+}
 
 export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coach' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin' }) {
   const [zone, setZone] = useState<string>()
@@ -24,6 +30,11 @@ export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coa
     if (d) {
       setZone(d.zone); setSchool(d.school); setName(d.name); setSurname(d.surname); setIdNumber(d.idNumber); setPhone(d.phone); setEmail(d.email)
     }
+    // Credentials chosen on the Create User screen take precedence over stale drafts
+    const regEmail = localStorage.getItem('reg:email') || ''
+    const regPassword = localStorage.getItem('reg:password') || ''
+    if (regEmail) setEmail(regEmail)
+    if (regPassword) setPassword(regPassword)
   }, [])
   useEffect(() => {
     const pref = localStorage.getItem('reg:adminRole') as any
@@ -40,12 +51,20 @@ export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coa
     if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID number')
     const passwordHash = password ? bcrypt.hashSync(password, 10) : undefined
     const payload = { name, surname, idNumber, phone, email, role: roleSel, zoneId: zone, schoolId: school, passwordHash }
-    await login('EPHSRUAdmin', zone, school)
+    // Keep the creator's session (EPHSRU admin / zone coordinator stays signed
+    // in) — the server checks THEIR authority to create this admin role.
+    if (!getToken()) await login('EPHSRUAdmin', zone, school)
     const ok = await safePost('admins', payload)
-    if (!ok) addEntity('Admin', payload)
-    addAudit({ id: crypto.randomUUID(), userRole: 'EPHSRUAdmin', entity: 'Admin', action: 'create', after: { name, surname, school, role: roleSel }, ts: Date.now() })
+    if (!ok) {
+      addEntity('Admin', payload)
+      return notifyError('Could not create the account — check that the role and zone are within your authority.')
+    }
+    addAudit({ id: crypto.randomUUID(), userRole: role || 'EPHSRUAdmin', entity: 'Admin', action: 'create', after: { name, surname, school, role: roleSel }, ts: Date.now() })
     clearDraft('admin')
-    notifySuccess('Admin registration submitted')
+    try { localStorage.removeItem('reg:email'); localStorage.removeItem('reg:password'); localStorage.removeItem('reg:adminRole') } catch {}
+    notifySuccess(`${ROLE_LABELS[roleSel] || roleSel} account created${email ? ` for ${email}` : ''} — they can sign in now.`)
+    // Close the form and return to the dashboard automatically
+    window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'dashboard' }))
   }
   return (
     <form className="space-y-3" onSubmit={submit}>

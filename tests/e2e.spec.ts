@@ -58,9 +58,9 @@ test('Coach creates a player: age suggestions, SA ID check, POPIA consent', asyn
   await expect(page.getByLabel('Age Group (auto-suggested)')).toBeVisible()
   await page.getByLabel('POPIA consent').check()
   await page.getByRole('button', { name: 'Submit Player Registration' }).click()
-  await expect(page.getByText(/Congratulations! Your player registration has been submitted/i)).toBeVisible()
-  await page.getByRole('button', { name: 'View Player Dashboard' }).click()
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
+  // Success toast + the form closes itself back to the dashboard
+  await expect(page.getByText(/Player registered/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible({ timeout: 10000 })
 })
 
 test('SchoolAdmin lands on the dashboard after sign-in', async ({ page, request }) => {

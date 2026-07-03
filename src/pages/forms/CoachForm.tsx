@@ -84,23 +84,38 @@ export default function CoachForm({ role, onGoLogin, onGoDashboard }: { role?: '
       team: coachingAgeGroups[0] || '',
       references,
     }
-    await login('Coach', zone, school)
-    try {
-      localStorage.setItem('auth:role', 'Coach')
-      if (zone) localStorage.setItem('auth:zoneId', String(zone))
-      if (school) localStorage.setItem('auth:schoolId', String(school))
-    } catch {}
+    // Keep the creator's session (school admin stays signed in); only fall back
+    // to a self-registration token when nobody is logged in.
+    const delegated = Boolean(localStorage.getItem('auth:token'))
+    if (!delegated) {
+      await login('Coach', zone, school)
+      try {
+        localStorage.setItem('auth:role', 'Coach')
+        if (zone) localStorage.setItem('auth:zoneId', String(zone))
+        if (school) localStorage.setItem('auth:schoolId', String(school))
+      } catch {}
+    }
     const res = await postJson('coaches', payload)
-    if (!res) addEntity('Coach', payload)
+    if (!res) {
+      addEntity('Coach', payload)
+      return notifyError('Could not create the coach — check the school is within your authority.')
+    }
     const coachId = (res as any)?.id || school || ''
     for (const [type, url] of Object.entries(docUrls)) {
       const doc = { ownerType: 'Coach' as const, ownerId: coachId, type, fileName: url.split('/').pop(), fileUrl: url, url }
       const ok = await safePost('documents', doc)
       if (!ok) saveDocumentLocal(doc)
     }
-    addAudit({ id: crypto.randomUUID(), userRole: 'SchoolAdmin', entity: 'Coach', action: 'create', after: { name, surname, school }, ts: Date.now() })
+    addAudit({ id: crypto.randomUUID(), userRole: role || 'SchoolAdmin', entity: 'Coach', action: 'create', after: { name, surname, school }, ts: Date.now() })
     clearDraft('coach')
-    setSubmitted(true)
+    try { localStorage.removeItem('reg:email'); localStorage.removeItem('reg:password') } catch {}
+    if (delegated) {
+      // Close the form and return the creator to their dashboard automatically
+      notifySuccess(`Coach account created${email ? ` for ${email}` : ''} — they can sign in now.`)
+      window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'dashboard' }))
+    } else {
+      setSubmitted(true)
+    }
   }
   return (
     <form className="space-y-3" onSubmit={submit}>

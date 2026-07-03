@@ -132,7 +132,11 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
     addEntity('Player', { ...payload, serverId })
     addAudit({ id: crypto.randomUUID(), userRole: 'Coach', entity: 'Player', action: 'create', after: { name, surname, school }, ts: Date.now() })
     clearDraft('player')
+    try { localStorage.removeItem('reg:email'); localStorage.removeItem('reg:password') } catch {}
     setSubmitted(true)
+    notifySuccess(`Player registered${email ? ` (${email})` : ''} — submitted for coach review.`)
+    // Close the form automatically after a short beat so the confirmation is seen
+    setTimeout(() => { try { onGoDashboard?.() } catch {} }, 1500)
   }
   return (
     <form className="space-y-3" onSubmit={submit}>

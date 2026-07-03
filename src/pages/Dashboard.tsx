@@ -195,6 +195,7 @@ export default function Dashboard({ role }: { role: Role }) {
             players={seasonPlayers}
             coaches={seasonCoaches}
             referees={filteredReferees}
+            admins={filteredAdmins}
             onRefresh={load}
           />
         </>
