@@ -6,7 +6,7 @@ import { addAudit } from '../../utils/audit'
 import { addEntity } from '../../utils/db'
 import { safePost } from '../../utils/api'
 import { loadDraft, saveDraft, clearDraft } from '../../utils/storage'
-import { login } from '../../utils/auth'
+import { login, getToken } from '../../utils/auth'
 import bcrypt from 'bcryptjs'
 
 export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'Coach' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin' }) {
@@ -18,28 +18,51 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [refereeLevel, setRefereeLevel] = useState('Provincial')
+  const [yearsExperience, setYearsExperience] = useState('')
+  const [availability, setAvailability] = useState<string[]>([])
   useEffect(() => {
     const d = loadDraft<any>('referee')
     if (d) {
       setZone(d.zone); setName(d.name); setSurname(d.surname); setIdNumber(d.idNumber); setDob(d.dob); setPhone(d.phone); setEmail(d.email)
+      if (d.refereeLevel) setRefereeLevel(d.refereeLevel)
+      if (d.yearsExperience) setYearsExperience(d.yearsExperience)
+      if (Array.isArray(d.availability)) setAvailability(d.availability)
     }
+    // Credentials chosen on the Create User screen take precedence over stale drafts
+    const regEmail = localStorage.getItem('reg:email') || ''
+    const regPassword = localStorage.getItem('reg:password') || ''
+    if (regEmail) setEmail(regEmail)
+    if (regPassword) setPassword(regPassword)
   }, [])
   useEffect(() => {
-    saveDraft('referee', { zone, name, surname, idNumber, dob, phone, email })
-  }, [zone, name, surname, idNumber, dob, phone, email])
+    saveDraft('referee', { zone, name, surname, idNumber, dob, phone, email, refereeLevel, yearsExperience, availability })
+  }, [zone, name, surname, idNumber, dob, phone, email, refereeLevel, yearsExperience, availability])
+  const toggleDay = (d: string) => setAvailability((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]))
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    
+
     if (email && !isEmail(email)) return notifyError('Invalid email')
     if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
     if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID number')
     const passwordHash = password ? bcrypt.hashSync(password, 10) : undefined
-    const payload = { name, surname, idNumber, dob, phone, email, zoneId: zone, passwordHash }
-    await login('Referee', zone)
+    // When a school admin registers the referee, tie the official to their school
+    // so messaging and document review stay in scope.
+    const creatorSchool = localStorage.getItem('auth:schoolId') || undefined
+    const payload = {
+      name, surname, idNumber, dob, phone, email, zoneId: zone, passwordHash,
+      qualifications: refereeLevel, experience: yearsExperience,
+      refereeLevel, yearsExperience, availability,
+      schoolId: creatorSchool,
+    }
+    // Keep the creator's session (the school admin stays signed in); only fall
+    // back to a self-registration token when nobody is logged in.
+    if (!getToken()) await login('Referee', zone)
     const ok = await safePost('referees', payload)
     if (!ok) addEntity('Referee', payload)
-    addAudit({ id: crypto.randomUUID(), userRole: 'EPHSRUAdmin', entity: 'Referee', action: 'create', after: { name, surname, zone }, ts: Date.now() })
+    addAudit({ id: crypto.randomUUID(), userRole: role || 'SchoolAdmin', entity: 'Referee', action: 'create', after: { name, surname, zone }, ts: Date.now() })
     clearDraft('referee')
+    try { localStorage.removeItem('reg:email'); localStorage.removeItem('reg:password') } catch {}
     notifySuccess('Referee registration submitted')
   }
   return (
@@ -82,7 +105,7 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block">
             <span className="text-sm font-medium">Referee Level</span>
-            <select className="mt-1 w-full rounded-md border p-2">
+            <select className="mt-1 w-full rounded-md border p-2" value={refereeLevel} onChange={(e) => setRefereeLevel(e.target.value)}>
               {['Provincial','Club','Schools'].map((q) => (
                 <option key={q}>{q}</option>
               ))}
@@ -90,7 +113,7 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
           </label>
           <label className="block">
             <span className="text-sm font-medium">Years of Experience</span>
-            <input type="number" className="mt-1 w-full rounded-md border p-2" />
+            <input type="number" className="mt-1 w-full rounded-md border p-2" value={yearsExperience} onChange={(e) => setYearsExperience(e.target.value)} />
           </label>
           <label className="block sm:col-span-2">
             <span className="text-sm font-medium">Refereeing Qualification Certificate</span>
@@ -102,7 +125,9 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
         <legend className="px-2 text-sm font-semibold">Availability</legend>
         <div className="grid grid-cols-2 gap-2">
           {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((d) => (
-            <label key={d} className="flex items-center gap-2 text-sm"><input type="checkbox" /> {d}</label>
+            <label key={d} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={availability.includes(d)} onChange={() => toggleDay(d)} /> {d}
+            </label>
           ))}
         </div>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">

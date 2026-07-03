@@ -80,7 +80,8 @@ export default function Dashboard({ role }: { role: Role }) {
       const list = await fetchList('schools', filters)
       const s = Array.isArray(list) && list.length ? list[0] : null
       const authSchoolId = typeof window !== 'undefined' ? (localStorage.getItem('auth:schoolId') || '') : ''
-      setSchoolNameTop(String(s?.data?.name || s?.name || authSchoolId || ''))
+      // Fall back to the humanized catalog name, never the raw slug
+      setSchoolNameTop(String(s?.data?.name || s?.name || (authSchoolId ? schoolNameOf(authSchoolId) : '') || ''))
     })()
   }, [zone, school])
   useEffect(() => {
@@ -3238,7 +3239,7 @@ function RefereeDashboard({ referees }: { referees: any[] }) {
       <div>
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
           {referees.map((r) => (
-            <RefereeCard key={r.id} referee={r} badge={String(r.data?.zoneId || '—')} />
+            <RefereeCard key={r.id} referee={r} badge={r.data?.zoneId ? zoneNameOf(String(r.data.zoneId)) : '—'} />
           ))}
           {referees.length === 0 && <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">No referees found</div>}
         </div>

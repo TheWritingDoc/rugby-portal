@@ -198,7 +198,8 @@ function allowPost(type, role) {
   if (role === 'EPHSRUAdmin') return true
   if (type === 'players' && (role === 'Coach' || role === 'SchoolAdmin' || role === 'Player')) return true
   if (type === 'coaches' && (role === 'SchoolAdmin' || (env !== 'production' && role === 'Coach'))) return true
-  if (type === 'referees' && (role === 'EPHSRUAdmin' || role === 'Referee' || role === 'ZoneCoordinator')) return true
+  // School admins onboard referees (matches the delegation UI); zone coordinators manage the zone panel
+  if (type === 'referees' && (role === 'EPHSRUAdmin' || role === 'Referee' || role === 'ZoneCoordinator' || role === 'SchoolAdmin')) return true
   if (type === 'schools' && (role === 'SchoolAdmin' || role === 'ZoneCoordinator')) return true
   if (type === 'admins' && (role === 'EPHSRUAdmin' || role === 'ZoneCoordinator')) return true
   return false
@@ -246,6 +247,8 @@ function withinScope(type, user, data) {
     if (type === 'players' || type === 'coaches' || type === 'schools' || type === 'admins') {
       return String(data.schoolId ?? '') === String(user.schoolId ?? '')
     }
+    // Referees are zone-scoped rows; a school admin may register officials for their own zone
+    if (type === 'referees') return String(data.zoneId ?? '') === String(user.zoneId ?? '')
   }
   if (role === 'Coach') {
     if (type === 'players') return String(data.schoolId ?? '') === String(user.schoolId ?? '')
@@ -1376,8 +1379,10 @@ app.put('/api/coaches/:id', (req, res) => {
     if (err) return res.status(500).json({ error: err.message })
     if (!row) return res.status(404).json({ error: 'not_found' })
     if (!allowUpdate('coaches', req.user?.role, req.user, row)) return res.status(403).json({ error: 'forbidden' })
-    if (!withinScope('coaches', req.user, req.body)) return res.status(403).json({ error: 'scope' })
-    
+    // Scope-check the merged result so partial updates (no schoolId in body)
+    // pass, while attempts to MOVE the coach out of scope still fail.
+    if (!withinScope('coaches', req.user, { ...row, ...req.body })) return res.status(403).json({ error: 'scope' })
+
     const existingData = JSON.parse(row.data || '{}')
     const updatedData = { ...existingData, ...req.body }
     const ts = Date.now()
@@ -1794,67 +1799,10 @@ app.post('/api/upload', (req, res, next) => {
 // CDN, so this route is a harmless no-op (the directory stays empty).
 if (!usingSupabaseStorage) app.use('/uploads', express.static(localUploadDir))
 
-// Player Approvals endpoints
-app.get('/api/players/pending', (req, res) => {
-  const role = req.user?.role
-  if (!(role === 'Coach' || role === 'SchoolAdmin' || role === 'EPHSRUAdmin')) {
-    return res.status(403).json({ error: 'forbidden' })
-  }
-
-  let query = `
-    SELECT p.*, 
-           CASE 
-             WHEN p.data LIKE '%"status":"pending"%' THEN 'pending'
-             WHEN p.data LIKE '%"status":"rejected"%' THEN 'rejected'
-             ELSE 'approved'
-           END as approval_status
-    FROM players p
-  `
-  const params = []
-  const conditions = []
-
-  // Add role-based filtering
-  if (role === 'Coach' || role === 'SchoolAdmin') {
-    conditions.push('p.schoolId = ?')
-    params.push(req.user.schoolId)
-  }
-  if (role === 'Coach') {
-    conditions.push('p.zoneId = ?')
-    params.push(req.user.zoneId)
-  }
-
-  // Only show pending players
-  conditions.push("(p.data LIKE '%\"status\":\"pending\"%' OR p.data LIKE '%\"needsReview\":true%')")
-
-  if (conditions.length > 0) {
-    query += ' WHERE ' + conditions.join(' AND ')
-  }
-
-  query += ' ORDER BY p.ts DESC'
-
-  db.all(query, params, (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message })
-    
-    // Parse data and add approval status
-    const players = rows.map(row => {
-      try {
-        const data = JSON.parse(row.data || '{}')
-        return {
-          ...row,
-          data: {
-            ...data,
-            approvalStatus: row.approval_status
-          }
-        }
-      } catch {
-        return row
-      }
-    })
-    
-    res.json(filterByRole('players', players, req.user))
-  })
-})
-
+// Player Approvals endpoints.
+// NOTE: a former GET /api/players/pending route lived here, but it was defined
+// after GET /api/players/:id and therefore unreachable (":id" swallowed
+// "pending" → 404). Nothing referenced it; the working queue is /api/pending.
 app.get('/api/pending', (req, res) => {
   const role = req.user?.role
   if (!(role === 'Coach' || role === 'SchoolAdmin' || role === 'EPHSRUAdmin')) {
