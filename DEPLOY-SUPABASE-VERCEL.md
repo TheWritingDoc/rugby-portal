@@ -65,6 +65,11 @@ git push -u origin main      # authenticate with a fresh PAT or the GitHub CLI
 | `ALLOWED_ORIGINS` | `https://<your-app>.vercel.app` | lock CORS to your domain |
 | `GOOGLE_CLIENT_ID` / `VITE_GOOGLE_CLIENT_ID` | *(optional)* | only if using Google sign-in |
 | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` / `VITE_FACEBOOK_APP_ID` | *(optional)* | only if using Facebook sign-in |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | *(recommended)* | outbound email — see below |
+| `MAIL_FROM` | `EPHSRU Rugby Portal <no-reply@yourdomain>` | sender address (domain verified with the provider) |
+| `APP_URL` | `https://<your-app>.vercel.app` | link/button used inside emails |
+
+**Email setup (Resend, ~5 minutes):** create a free account at <https://resend.com> → verify your sending domain (or use their onboarding domain to start) → create an API key. Then set `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=465`, `SMTP_USER=resend`, `SMTP_PASS=<your API key>`. When these are set, the portal emails: welcome messages when accounts are created, registration approvals/rejections, transfer decisions, in-app message alerts, and password-reset codes. When unset, all of these remain in-app notifications only.
 
 Generate `JWT_SECRET` with:
 

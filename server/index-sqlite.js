@@ -6,6 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import db from './db.js'
 import { saveUpload, localUploadDir, usingSupabaseStorage } from './storage.js'
+import { sendMail, mailEnabled, APP_URL } from './mailer.js'
 import bcrypt from 'bcryptjs'
 
 const app = express()
@@ -84,7 +85,7 @@ function writeAudit(userRole, entity, action, beforeObj, afterObj) {
 // Notification outbox: every workflow outcome lands here per recipient email and is
 // shown in-app. EMAIL INTEGRATION POINT: hook a mail/SMS provider here to also
 // deliver externally — the table already holds everything a sender needs.
-function queueNotification(email, subject, message) {
+function queueNotification(email, subject, message, opts = {}) {
   try {
     const e = String(email || '').trim().toLowerCase()
     if (!e) return
@@ -94,7 +95,23 @@ function queueNotification(email, subject, message) {
       [id, e, String(subject || ''), String(message || ''), Date.now()]
     )
     console.log(`[notify] ${e}: ${subject}`)
+    // Mirror in-app notifications to real email when SMTP is configured
+    // (pass { emailCopy: false } when a dedicated email already covers it)
+    if (opts.emailCopy !== false) sendMail(e, subject, message)
   } catch {}
+}
+
+// Sent when a superior creates an account down the hierarchy — the new user
+// learns their account exists and how to get in (password comes from their
+// administrator; "Forgot password?" lets them set their own).
+function welcomeNotification(email, roleLabel) {
+  const e = String(email || '').trim().toLowerCase()
+  if (!e) return
+  queueNotification(
+    e,
+    'Your EPHSRU Rugby Portal account is ready',
+    `An account has been created for you as ${roleLabel}. Sign in with this email address${APP_URL ? ` at ${APP_URL}` : ''} using the password your administrator gave you — you can change it any time via "Forgot password?" on the sign-in page.`
+  )
 }
 
 function resolveUserDisplay(email) {
@@ -797,6 +814,7 @@ app.post('/api/players', (req, res) => {
       function(err) {
         if (err) return res.status(500).json({ error: err.message })
         writeAudit(req.user?.role, 'players', 'create', null, { id, ...body })
+        welcomeNotification(body.email, 'a Player')
         res.json({ id, ts })
       }
     )
@@ -1331,6 +1349,7 @@ app.post('/api/coaches', (req, res) => {
     function(err) {
       if (err) return res.status(500).json({ error: err.message })
       writeAudit(req.user?.role, 'coaches', 'create', null, { id, ...req.body })
+      welcomeNotification(req.body.email, 'a Coach')
       res.json({ id, ts })
     }
   )
@@ -1424,10 +1443,11 @@ app.post('/api/referees', (req, res) => {
   
   db.run(
     'INSERT INTO referees (id, name, surname, idNumber, contactNumber, email, qualifications, experience, data, ts, zoneId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, req.body.name || '', req.body.surname || '', req.body.idNumber || null, req.body.contactNumber || null, 
+    [id, req.body.name || '', req.body.surname || '', req.body.idNumber || null, req.body.contactNumber || null,
      req.body.email || null, req.body.qualifications || null, req.body.experience || null, data, ts, req.body.zoneId || null],
     function(err) {
       if (err) return res.status(500).json({ error: err.message })
+      welcomeNotification(req.body.email, 'a Referee')
       res.json({ id, ts })
     }
   )
@@ -1483,10 +1503,11 @@ app.post('/api/admins', (req, res) => {
   
   db.run(
     'INSERT INTO admins (id, name, surname, idNumber, contactNumber, email, role, zoneId, schoolId, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, req.body.name || '', req.body.surname || '', req.body.idNumber || null, req.body.contactNumber || null, 
+    [id, req.body.name || '', req.body.surname || '', req.body.idNumber || null, req.body.contactNumber || null,
      req.body.email || null, req.body.role || null, req.body.zoneId || null, req.body.schoolId || null, data, ts],
     function(err) {
       if (err) return res.status(500).json({ error: err.message })
+      welcomeNotification(req.body.email, req.body.role === 'ZoneCoordinator' ? 'a Zone Coordinator' : req.body.role === 'EPHSRUAdmin' ? 'an EPHSRU Admin' : 'a School Admin')
       res.json({ id, ts })
     }
   )
@@ -1721,9 +1742,15 @@ app.post('/api/auth/forgot', async (req, res) => {
   const expiresAt = Date.now() + 60 * 60 * 1000
   db.run('INSERT INTO password_resets (token, email, expiresAt) VALUES (?, ?, ?)', [token, email, expiresAt], (err) => {
     if (err) return res.status(500).json({ error: 'reset_failed' })
-    // EMAIL INTEGRATION POINT: send `token` to `email` via your mail provider here
     console.log(`[password-reset] token for ${email}: ${token} (expires ${new Date(expiresAt).toISOString()})`)
-    queueNotification(email, 'Password reset requested', 'A password reset was requested for your account. If this was not you, contact your school administrator.')
+    // The reset code goes DIRECTLY by email (never into the in-app inbox —
+    // a locked-out user can't read that). The in-app note is just a heads-up.
+    sendMail(
+      email,
+      'Your password reset code',
+      `You (or your administrator) requested a password reset for the EPHSRU Rugby Portal.\n\nYour reset code is:\n\n${token}\n\nOn the sign-in page choose "Forgot password?", paste this code and pick a new password. The code expires in 1 hour.\n\nIf you did not request this, you can safely ignore this email.`
+    )
+    queueNotification(email, 'Password reset requested', 'A password reset was requested for your account. If this was not you, contact your school administrator.', { emailCopy: false })
     if ((process.env.NODE_ENV || 'development') !== 'production') {
       return res.json({ ...generic, token })
     }
