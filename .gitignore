@@ -17,3 +17,7 @@ test-results/
 uploads/
 # Contains a real JWT secret — self-hosting/PM2 config, never commit
 ecosystem.config.cjs
+.vercel
+.env*
+# Contains real test passwords — never commit
+TEST-CREDENTIALS.md

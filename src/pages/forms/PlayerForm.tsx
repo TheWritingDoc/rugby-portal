@@ -2,7 +2,7 @@ import { notifyError, notifySuccess } from '../../utils/notify'
 import { useEffect, useMemo, useState } from 'react'
 import { ZoneSelect, SchoolSelect, AutoFields } from '../../components/Dropdowns'
 import { suggestAgeGroups } from '../../data/zones'
-import { isEmail, isPhoneZA, isIdNumber } from '../../utils/validation'
+import { isEmail, isPhoneZA, isIdNumber, parseSaId } from '../../utils/validation'
 import { addAudit } from '../../utils/audit'
 import { addEntity } from '../../utils/db'
 import { login } from '../../utils/auth'
@@ -36,6 +36,7 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
   const [parentContact, setParentContact] = useState('')
   const [parentEmail, setParentEmail] = useState('')
   const [consentSignature, setConsentSignature] = useState('')
+  const [popiaConsent, setPopiaConsent] = useState(false)
   const [position, setPosition] = useState('')
   const [ageGroup, setAgeGroup] = useState('')
   const [jerseyNumber, setJerseyNumber] = useState<string>('')
@@ -85,14 +86,28 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
     saveDraft('player', { zone, school, dob, gender, name, surname, idNumber, phone, email, address, emergencyContactName, emergencyContactNumber, parentName, parentSurname, relationship, parentContact, parentEmail, consentSignature, position, jerseyNumber, previousSchool, medicalAidName, medicalAidNumber, allergies, chronicConditions, medicalNotes })
   }, [zone, school, dob, gender, name, surname, idNumber, phone, email, address, emergencyContactName, emergencyContactNumber, parentName, parentSurname, relationship, parentContact, parentEmail, consentSignature, position, jerseyNumber, previousSchool, medicalAidName, medicalAidNumber, allergies, chronicConditions, medicalNotes])
   const suggested = useMemo(() => suggestAgeGroups(dob, gender === '' ? undefined : gender), [dob, gender])
+  // Decode the SA ID (if it's a valid 13-digit one) to auto-fill and cross-check
+  // date of birth and gender against what was captured.
+  const idInfo = useMemo(() => parseSaId(idNumber), [idNumber])
+  useEffect(() => {
+    if (!idInfo.valid) return
+    if (!dob && idInfo.dob) setDob(idInfo.dob)
+    if (!gender && idInfo.gender) setGender(idInfo.gender)
+  }, [idInfo.valid, idInfo.dob, idInfo.gender]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Registering above the player's natural age-grade ("playing up") needs a
+  // SARU Schedule A parent/guardian consent + exemption (front-row: Schedule B).
+  const chosenAge = ageGroup || suggested[0] || ''
+  const playingUp = Boolean(chosenAge && suggested.length > 0 && suggested.indexOf(chosenAge) > 0)
+  const isFrontRow = position === 'Prop' || position === 'Hooker'
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     if (role && !['Player','Coach','SchoolAdmin','EPHSRUAdmin'].includes(role)) return notifyError('Not authorized')
     if (email && !isEmail(email)) return notifyError('Invalid email')
     if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
-    if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID/Passport number')
+    if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID/Passport number — a South African ID must be 13 digits with a valid check digit.')
+    if (!popiaConsent) return notifyError('Please give POPIA consent to process this player’s personal and medical information.')
     const passwordHash = password ? bcrypt.hashSync(password, 10) : undefined
-    const payload = { name, surname, idNumber, dob, gender, phone, email, zoneId: zone, schoolId: school, ageGroup: ageGroup || suggested[0], photoUrl, address, emergencyContactName, emergencyContactNumber, parentName, parentSurname, relationship, parentContact, parentEmail, consentSignature, position, jerseyNumber, previousSchool, medicalAidName, medicalAidNumber, allergies, chronicConditions, medicalNotes, passwordHash }
+    const payload = { name, surname, idNumber, dob, gender, phone, email, zoneId: zone, schoolId: school, ageGroup: ageGroup || suggested[0], photoUrl, address, emergencyContactName, emergencyContactNumber, parentName, parentSurname, relationship, parentContact, parentEmail, consentSignature, popiaConsent, popiaConsentAt: popiaConsent ? Date.now() : undefined, playingUp, position, jerseyNumber, previousSchool, medicalAidName, medicalAidNumber, allergies, chronicConditions, medicalNotes, passwordHash }
     await login('Player', zone, school)
     try {
       localStorage.setItem('auth:role', 'Player')
@@ -159,7 +174,20 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
         </label>
         <label className="block">
           <span className="text-sm font-medium">ID/Passport Number</span>
-          <input className="mt-1 w-full rounded-md border p-2" value={idNumber} onChange={(e) => setIdNumber(e.target.value)} />
+          <input className="mt-1 w-full rounded-md border p-2" value={idNumber} onChange={(e) => setIdNumber(e.target.value)} placeholder="13-digit SA ID or passport" />
+          {idNumber.length >= 6 && (
+            idInfo.valid ? (
+              (dob && idInfo.dob && dob !== idInfo.dob) || (gender && idInfo.gender && gender !== idInfo.gender) ? (
+                <span className="mt-1 block text-xs text-amber-700">⚠ ID indicates DOB {idInfo.dob}, {idInfo.gender} — does not match the entered date of birth/gender.</span>
+              ) : (
+                <span className="mt-1 block text-xs text-green-700">✓ Valid SA ID — DOB {idInfo.dob}, {idInfo.gender}{idInfo.citizen === false ? ' (permanent resident)' : ''}</span>
+              )
+            ) : /^\d{13}$/.test(idNumber) ? (
+              <span className="mt-1 block text-xs text-red-600">⚠ Not a valid SA ID (check digit or date is wrong)</span>
+            ) : (
+              <span className="mt-1 block text-xs text-gray-400">Passport / non-SA document</span>
+            )
+          )}
         </label>
         <label className="block">
           <span className="text-sm font-medium">Gender</span>
@@ -276,10 +304,25 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
             <span className="text-sm font-medium">Digital Consent Signature</span>
             <input className="mt-1 w-full rounded-md border p-2" placeholder="Type full name" value={consentSignature} onChange={(e) => setConsentSignature(e.target.value)} />
           </label>
+          <label className="flex items-start gap-2 sm:col-span-2">
+            <input type="checkbox" className="mt-1" aria-label="POPIA consent" checked={popiaConsent} onChange={(e) => setPopiaConsent(e.target.checked)} />
+            <span className="text-xs text-gray-700">
+              I, as the player or parent/guardian, consent to the collection and processing of this player’s personal and medical
+              information for rugby registration and administration, in accordance with the Protection of Personal Information Act
+              (POPIA, Act 4 of 2013), and confirm the details provided are accurate. <span className="text-red-600">*</span>
+            </span>
+          </label>
         </div>
       </fieldset>
       <fieldset className="rounded-md border p-3">
         <legend className="px-2 text-sm font-semibold">Rugby Details</legend>
+        {playingUp && (
+          <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+            ⚠ This player is being registered <strong>above</strong> their natural age-grade. Per SARU age-banding, a parent/guardian
+            two-year exemption &amp; consent (<strong>Schedule A</strong>{isFrontRow ? ' + Schedule B for front-row' : ''}) and coach
+            certification are required. Ensure the consent below is completed and the exemption form is filed with your union.
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block">
             <span className="text-sm font-medium">Position(s) Played</span>

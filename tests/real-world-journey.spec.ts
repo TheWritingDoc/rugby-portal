@@ -1,4 +1,5 @@
 import { test, expect, request as pwRequest, Page } from '@playwright/test'
+import { validSaId } from './helpers/said'
 
 /**
  * Real-world user journeys, driven through the browser the way actual users work:
@@ -31,7 +32,7 @@ const player = {
   name: 'Thando',
   surname: `Journey${ts}`,
   email: `player.journey.${ts}@test.local`,
-  idNumber: `90010${String(ts).slice(-8)}`,
+  idNumber: validSaId(ts, '2010-04-12', 'Male'),
 }
 const coachA = { name: 'Anele', surname: `CoachA${ts}`, email: `coacha.${ts}@test.local` }
 const coachB = { name: 'Bongani', surname: `CoachB${ts}`, email: `coachb.${ts}@test.local` }
@@ -122,6 +123,7 @@ test.describe('Real-world journeys across all roles', () => {
     expect(uploadRes.ok()).toBeTruthy()
     await expect(page.locator('img[alt="Profile"]')).toBeVisible()
 
+    await page.getByLabel('POPIA consent').check()
     const [regRes] = await Promise.all([
       page.waitForResponse((r) => r.url().includes('/api/players/register') && r.request().method() === 'POST'),
       page.getByRole('button', { name: 'Submit Player Registration' }).click(),

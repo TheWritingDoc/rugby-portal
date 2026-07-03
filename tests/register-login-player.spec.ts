@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { validSaId } from './helpers/said'
 
 test('Register player then login to access dashboard', async ({ page }) => {
   const ts = Date.now()
@@ -20,11 +21,12 @@ test('Register player then login to access dashboard', async ({ page }) => {
 
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Test')
   await page.getByRole('textbox', { name: 'Surname', exact: true }).fill('Player')
-  await page.getByLabel('ID/Passport').fill(`1001${Date.now().toString().slice(-9)}`)
+  await page.getByLabel('ID/Passport').fill(validSaId(Date.now(), '2010-01-01', 'Male'))
   await page.getByLabel('Date of Birth').fill('2010-01-01')
   await page.getByLabel('Gender').selectOption({ label: 'Male' })
   await page.getByLabel('Email Address').first().fill(email)
 
+  await page.getByLabel('POPIA consent').check()
   await page.getByRole('button', { name: 'Submit Player Registration' }).click()
   await expect(page.getByText(/Congratulations! Your player registration has been submitted/i)).toBeVisible()
 

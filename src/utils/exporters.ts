@@ -1,6 +1,7 @@
 // Offline exports for squads: spreadsheet (Excel-compatible CSV), printable profile
 // sheets, and game-day ID cards. Printing uses the browser's print dialog, so users
 // can pick "Save as PDF" or a physical printer.
+import QRCode from 'qrcode'
 import { API_ORIGIN } from './apiBase'
 import { schoolNameOf, zoneNameOf } from './labels'
 import { seasonYearOf } from './season'
@@ -158,10 +159,37 @@ export function printPlayerProfiles(players: any[], meta: PrintMeta = {}) {
   return openPrintWindow(meta.title || 'Player profiles', sheets, css)
 }
 
-export function printPlayerCards(players: any[], meta: PrintMeta = {}) {
+export async function printPlayerCards(players: any[], meta: PrintMeta = {}) {
+  // Open the print window synchronously (inside the click gesture) so pop-up
+  // blockers don't kill it while we generate QR codes asynchronously.
+  const w = window.open('', '_blank', 'width=900,height=700')
+  if (!w) return false
+  w.document.write('<!doctype html><meta charset="utf-8"><title>Preparing cards…</title><body style="font-family:sans-serif;padding:2rem;color:#334155">Preparing match-day cards…</body>')
+
   const season = new Date().getFullYear()
   const logo = absUrl(meta.logoUrl)
-  const cards = (players || []).map((p) => {
+  const list = players || []
+
+  // Each QR encodes the player's identity so a match-day official can scan and
+  // verify who the card belongs to (works offline — the data is self-contained).
+  const qrs = await Promise.all(
+    list.map((p) => {
+      const r = rowOf(p)
+      const refId = p?.id || p?.serverId || p?.data?.serverId || ''
+      const payload = [
+        'EPHSRU RUGBY — Player ID',
+        `${r.name} ${r.surname}`.trim(),
+        r.idNumber ? `ID: ${r.idNumber}` : '',
+        `${r.ageGroup || r.team || ''}${r.position ? ' · ' + r.position : ''}${r.jerseyNumber ? ' #' + r.jerseyNumber : ''}`.trim(),
+        r.school || '',
+        `Season ${season}`,
+        refId ? `Ref: ${refId}` : '',
+      ].filter(Boolean).join('\n')
+      return QRCode.toDataURL(payload, { margin: 0, width: 160, errorCorrectionLevel: 'M' }).catch(() => '')
+    })
+  )
+
+  const cards = list.map((p, i) => {
     const r = rowOf(p)
     const initials = ((r.name.charAt(0) + r.surname.charAt(0)).toUpperCase()) || 'P'
     return `
@@ -180,6 +208,7 @@ export function printPlayerCards(players: any[], meta: PrintMeta = {}) {
           <div class="crow"><span>Team</span><b>${esc(r.ageGroup || r.team) || '—'}</b></div>
           <div class="crow"><span>Position</span><b>${esc(r.position) || '—'}${r.jerseyNumber ? ` · #${esc(r.jerseyNumber)}` : ''}</b></div>
         </div>
+        ${qrs[i] ? `<div class="qrbox"><img class="qr" src="${qrs[i]}" alt="Scan to verify" /><span class="qrlabel">SCAN</span></div>` : ''}
       </div>
       <div class="strip">EPHSRU PLAYER IDENTIFICATION • SEASON ${season}</div>
     </div>`
@@ -192,15 +221,24 @@ export function printPlayerCards(players: any[], meta: PrintMeta = {}) {
     .blogo { height: 6mm; width: 6mm; object-fit: contain; background: #fff; border-radius: 1mm; }
     .bschool { font-size: 8.5pt; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .bseason { margin-left: auto; font-size: 8pt; font-weight: 700; background: rgba(255,255,255,.18); border-radius: 2mm; padding: 0 2mm; }
-    .body { display: flex; gap: 3mm; padding: 2.5mm 3mm; flex: 1; }
-    .cphoto { width: 22mm; height: 28mm; object-fit: cover; border-radius: 1.5mm; border: 1px solid #cbd5e1; }
-    .cphoto.initials { display: flex; align-items: center; justify-content: center; background: #e2e8f0; color: #475569; font-size: 16pt; font-weight: 800; }
+    .body { display: flex; gap: 2.5mm; padding: 2.5mm 3mm; flex: 1; align-items: stretch; }
+    .cphoto { width: 20mm; height: 26mm; object-fit: cover; border-radius: 1.5mm; border: 1px solid #cbd5e1; }
+    .cphoto.initials { display: flex; align-items: center; justify-content: center; background: #e2e8f0; color: #475569; font-size: 15pt; font-weight: 800; }
     .info { flex: 1; min-width: 0; }
-    .cname { font-size: 11pt; font-weight: 800; color: #0f172a; margin-bottom: 1.5mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .crow { display: flex; justify-content: space-between; font-size: 7.5pt; border-bottom: 1px dotted #e2e8f0; padding: 0.7mm 0; }
+    .cname { font-size: 10.5pt; font-weight: 800; color: #0f172a; margin-bottom: 1.5mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .crow { display: flex; justify-content: space-between; gap: 1mm; font-size: 7pt; border-bottom: 1px dotted #e2e8f0; padding: 0.6mm 0; }
     .crow span { color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
-    .crow b { color: #0f172a; }
+    .crow b { color: #0f172a; text-align: right; }
+    .qrbox { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .qr { width: 15mm; height: 15mm; }
+    .qrlabel { font-size: 5.5pt; font-weight: 700; letter-spacing: .12em; color: #64748b; margin-top: 0.5mm; }
     .strip { background: #15803d; color: #fff; text-align: center; font-size: 6.5pt; font-weight: 700; letter-spacing: .08em; padding: 1mm 0; }
   `
-  return openPrintWindow(meta.title || 'Player ID cards', cards, css)
+
+  const title = meta.title || 'Player ID cards'
+  w.document.open()
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${css}</style></head><body>${cards}</body></html>`)
+  w.document.close()
+  w.onload = () => setTimeout(() => { w.focus(); w.print() }, 400)
+  return true
 }

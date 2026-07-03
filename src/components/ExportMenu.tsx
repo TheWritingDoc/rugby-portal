@@ -28,10 +28,10 @@ export default function ExportMenu({
   const count = Array.isArray(players) ? players.length : 0
   const meta = { schoolName, logoUrl }
 
-  const runPrint = (fn: (p: any[], m: any) => boolean | void, what: string) => {
+  const runPrint = async (fn: (p: any[], m: any) => boolean | void | Promise<boolean | void>, what: string) => {
     setOpen(false)
     if (!count) return notifyError('No players to export')
-    const ok = fn(players, { ...meta, title: what })
+    const ok = await fn(players, { ...meta, title: what })
     if (ok === false) notifyError('Pop-up blocked — allow pop-ups for this site to print.')
     else notifyInfo('Choose "Save as PDF" in the print dialog for offline storage.')
   }
