@@ -1447,6 +1447,7 @@ app.post('/api/referees', (req, res) => {
      req.body.email || null, req.body.qualifications || null, req.body.experience || null, data, ts, req.body.zoneId || null],
     function(err) {
       if (err) return res.status(500).json({ error: err.message })
+      writeAudit(req.user?.role, 'referees', 'create', null, { id, ...req.body })
       welcomeNotification(req.body.email, 'a Referee')
       res.json({ id, ts })
     }

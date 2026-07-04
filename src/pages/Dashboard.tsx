@@ -26,6 +26,7 @@ import EPHSRUAdminDashboard from '../components/dashboards/EPHSRUAdminDashboard'
 import SeasonFilter from '../components/SeasonFilter'
 import Messages from '../components/Messages'
 import MyPhoto from '../components/MyPhoto'
+import ShowMoreButton from '../components/ShowMoreButton'
 import { currentSeasonYear, filterBySeason, seasonsPresent, archivedCount, seasonYearOf } from '../utils/season'
 import { schoolNameOf, zoneNameOf } from '../utils/labels'
 import { resizeImage } from '../utils/image'
@@ -737,6 +738,9 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
   const [currentSeasonOnly, setCurrentSeasonOnly] = useState(true)
   const [teamFilter, setTeamFilter] = useState<string>('')
   const [ageFilter, setAgeFilter] = useState<string>('')
+  // Search results page in steps of 24 — consistent with every other roster
+  const [searchVisible, setSearchVisible] = useState(24)
+  useEffect(() => { setSearchVisible(24) }, [query, pendingOnly, teamFilter, ageFilter, currentSeasonOnly])
   const [activeTab, setActiveTab] = useState<'players' | 'pending'>('players')
   const [pendingPlayers, setPendingPlayers] = useState<any[]>([])
   const [pendingApprovals, setPendingApprovals] = useState<any[]>([])
@@ -1800,7 +1804,7 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
                     const ai = listSorted.findIndex((x) => x.id === a.id)
                     const bi = listSorted.findIndex((x) => x.id === b.id)
                     return ai - bi
-                  }).map((p) => {
+                  }).slice(0, searchVisible).map((p) => {
                     const dn = p.data || {}
                     const t = String(dn.team || dn.ageGroup || '') || '—'
                     const needsReview = isPending(p)
@@ -1825,7 +1829,7 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
                 const ai = listSorted.findIndex((x) => x.id === a.id)
                 const bi = listSorted.findIndex((x) => x.id === b.id)
                 return ai - bi
-              }).map((p) => (
+              }).slice(0, searchVisible).map((p) => (
                 <PlayerCard
                   key={p.id || p.data?.serverId || p.data?.idNumber}
                   player={p}
@@ -1834,6 +1838,9 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
                 />
               ))}
             </div>
+          )}
+          {listFiltered.length > 0 && (
+            <ShowMoreButton total={listFiltered.length} shown={searchVisible} onMore={() => setSearchVisible((n) => n + 24)} className="mt-3" />
           )}
 
           {list.length === 0 && (
@@ -1958,6 +1965,9 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
   const [genderSel, setGenderSel] = useState<string | null>(null)
   const [teamSel, setTeamSel] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // Rosters page in steps of 24 — no endless scroll inside a team folder
+  const [visibleCount, setVisibleCount] = useState(24)
+  useEffect(() => { setVisibleCount(24) }, [yearSel, genderSel, teamSel, search])
   const [switching, setSwitching] = useState(false)
   const cache = useRef<Map<string, any[]>>(new Map())
   useEffect(() => { cache.current.clear() }, [players, yearSel])
@@ -2228,7 +2238,7 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
                   </tr>
                 </thead>
                 <tbody>
-                  {finalPlayers.map((p) => {
+                  {finalPlayers.slice(0, visibleCount).map((p) => {
                     const d = p.data || {}
                     return (
                       <tr key={p.id} className="hover:bg-gray-50">
@@ -2251,7 +2261,7 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-              {finalPlayers.map((p) => (
+              {finalPlayers.slice(0, visibleCount).map((p) => (
                 <PlayerCard
                   key={p.id}
                   player={p}
@@ -2262,6 +2272,7 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
               {finalPlayers.length === 0 && <div className="py-2 text-sm text-gray-600">No players</div>}
             </div>
           )}
+          <ShowMoreButton total={finalPlayers.length} shown={visibleCount} onMore={() => setVisibleCount((n) => n + 24)} className="mt-3" />
         </div>
       )}
     </div>
@@ -3026,6 +3037,7 @@ function PendingPlayersView({ players, loading, onApprove, onReject, onBulkAppro
   const [selectedPlayers, setSelectedPlayers] = useState<Set<string>>(new Set())
   const [rejectModal, setRejectModal] = useState<{ playerId: string; show: boolean } | null>(null)
   const [rejectReason, setRejectReason] = useState('')
+  const [pendingVisible, setPendingVisible] = useState(20)
   
   const toggleSelection = (playerId: string) => {
     const newSelected = new Set(selectedPlayers)
@@ -3114,7 +3126,7 @@ function PendingPlayersView({ players, loading, onApprove, onReject, onBulkAppro
       
       {/* Pending Players List */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {players.map((player) => {
+        {players.slice(0, pendingVisible).map((player) => {
           const d = player.data || {}
           const photo = typeof d.photoUrl === 'string' && d.photoUrl.startsWith('/uploads') 
             ? `${API_ORIGIN}${d.photoUrl}`
@@ -3175,7 +3187,8 @@ function PendingPlayersView({ players, loading, onApprove, onReject, onBulkAppro
           )
         })}
       </div>
-      
+      <ShowMoreButton total={players.length} shown={pendingVisible} onMore={() => setPendingVisible((n) => n + 20)} />
+
       {/* Reject Modal */}
       {rejectModal?.show && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">

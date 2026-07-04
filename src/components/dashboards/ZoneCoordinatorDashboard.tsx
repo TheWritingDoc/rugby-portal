@@ -18,6 +18,7 @@ import { zoneNameOf } from '../../utils/labels'
 import PlayerProfileModal from '../modals/PlayerProfileModal'
 import StaffProfileModal from '../modals/StaffProfileModal'
 import SchoolPeopleBrowser from '../SchoolPeopleBrowser'
+import ShowMoreButton from '../ShowMoreButton'
 
 interface ZoneCoordinatorDashboardProps {
   zone?: string
@@ -44,6 +45,7 @@ export default function ZoneCoordinatorDashboard({
   const [selectedSchool, setSelectedSchool] = useState<any | null>(null)
   const [viewingPlayer, setViewingPlayer] = useState<any | null>(null)
   const [viewingStaff, setViewingStaff] = useState<{ person: any; role: 'Coach' | 'Referee' | 'SchoolAdmin' } | null>(null)
+  const [visibleRequests, setVisibleRequests] = useState(20)
   const [assigningReferee, setAssigningReferee] = useState<any | null>(null)
   
   // School Registration
@@ -607,9 +609,9 @@ export default function ZoneCoordinatorDashboard({
         {/* REQUESTS TAB */}
         {activeTab === 'requests' && (
           <div className="space-y-6">
-            <h3 className="text-lg font-semibold">Rejected Requests</h3>
+            <h3 className="text-lg font-semibold">Rejected Requests ({rejectedRequests.length})</h3>
             <div className="space-y-4">
-              {rejectedRequests.map((player) => (
+              {rejectedRequests.slice(0, visibleRequests).map((player) => (
                 <div key={player.id} className="rounded-xl border bg-white p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-bold text-lg">
@@ -647,6 +649,7 @@ export default function ZoneCoordinatorDashboard({
                   </div>
                 </div>
               ))}
+              <ShowMoreButton total={rejectedRequests.length} shown={visibleRequests} onMore={() => setVisibleRequests((n) => n + 20)} />
               {rejectedRequests.length === 0 && (
                 <div className="text-center py-12 text-gray-500 border border-dashed rounded-xl">
                   <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-3 opacity-20" />

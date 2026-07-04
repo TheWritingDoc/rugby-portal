@@ -21,6 +21,7 @@ import CoachCard, { CoachAvatar } from '../CoachCard'
 import ExportMenu from '../ExportMenu'
 import PlayerProfileModal from '../modals/PlayerProfileModal'
 import StaffProfileModal from '../modals/StaffProfileModal'
+import ShowMoreButton from '../ShowMoreButton'
 
 interface SchoolAdminDashboardProps {
   zone?: string
@@ -59,6 +60,10 @@ export default function SchoolAdminDashboard({
   const [resultsSwitching, setResultsSwitching] = useState(false)
   const [viewingPlayer, setViewingPlayer] = useState<any>(null)
   const [viewingStaff, setViewingStaff] = useState<{ person: any; role: 'Coach' | 'Referee' } | null>(null)
+  // Bounded lists everywhere: rosters and queues page in steps, never one endless scroll
+  const [visiblePlayers, setVisiblePlayers] = useState(24)
+  const [visibleRequests, setVisibleRequests] = useState(20)
+  useEffect(() => { setVisiblePlayers(24) }, [selectedTeam, searchQuery, resultsView])
 
   useEffect(() => {
     try { localStorage.setItem('school:players:view', resultsView) } catch {}
@@ -802,7 +807,7 @@ export default function SchoolAdminDashboard({
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-200">
-                            {filteredPlayers.map((player) => {
+                            {filteredPlayers.slice(0, visiblePlayers).map((player) => {
                               const dn = player.data || {}
                               const t = String(dn.team || dn.ageGroup || '') || '—'
                               const isPending = String(dn.status || '').toLowerCase() === 'pending'
@@ -839,9 +844,9 @@ export default function SchoolAdminDashboard({
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                      {filteredPlayers.map((player) => (
-                        <PlayerCard 
-                          key={player.id} 
+                      {filteredPlayers.slice(0, visiblePlayers).map((player) => (
+                        <PlayerCard
+                          key={player.id}
                           player={player}
                           badge={player.data?.ageGroup || player.data?.team || '—'}
                           onClick={() => setViewingPlayer(player)}
@@ -849,7 +854,8 @@ export default function SchoolAdminDashboard({
                       ))}
                     </div>
                   )}
-                  
+                  <ShowMoreButton total={filteredPlayers.length} shown={visiblePlayers} onMore={() => setVisiblePlayers((n) => n + 24)} className="mt-4" />
+
                   {filteredPlayers.length === 0 && (
                     <div className="flex flex-col items-center justify-center py-16 text-center bg-white rounded-xl border border-dashed">
                       <div className="p-3 bg-gray-50 rounded-full mb-4">
@@ -1100,9 +1106,9 @@ export default function SchoolAdminDashboard({
         {/* REQUESTS TAB */}
         {activeTab === 'requests' && (
           <div className="space-y-6">
-            <h3 className="text-lg font-semibold">Pending Requests & Approvals</h3>
+            <h3 className="text-lg font-semibold">Pending Requests & Approvals ({requestsList.length})</h3>
             <div className="space-y-4">
-              {requestsList.map((player) => {
+              {requestsList.slice(0, visibleRequests).map((player) => {
                 const status = String(player.data?.status || '').toLowerCase()
                 const isRejected = status === 'rejected'
                 
@@ -1172,6 +1178,8 @@ export default function SchoolAdminDashboard({
                 )
               })}
               
+              <ShowMoreButton total={requestsList.length} shown={visibleRequests} onMore={() => setVisibleRequests((n) => n + 20)} />
+
               {requestsList.length === 0 && (
                 <div className="text-center py-12 text-gray-500 border border-dashed rounded-xl">
                   <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-3 opacity-20" />
