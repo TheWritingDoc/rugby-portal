@@ -67,10 +67,14 @@ export default function App() {
 
   function goBack() {
     setNavStack((s) => {
-      const prev = s[s.length - 1]
+      let prev = s[s.length - 1]
       if (!prev) return s
       const activeRole = roleRef.current
       if (!canAccess(prev, activeRole)) return s.slice(0, -1)
+      // While signed in, "Back" must never land on the sign-in screens —
+      // that reads as an accidental logout. Route those to the dashboard.
+      const signedIn = Boolean(localStorage.getItem('auth:token'))
+      if (signedIn && (prev === 'home' || prev === 'login')) prev = 'dashboard'
       trackUserAction('navigation', 'back', { from: screenRef.current, to: prev, role: activeRole })
       setScreen(prev)
       return s.slice(0, -1)
@@ -85,9 +89,13 @@ export default function App() {
     
     try {
       const target = localStorage.getItem('nav:target')
-      if (target === 'dashboard') {
-        setNavStack(['home'])
+      const signedIn = Boolean(localStorage.getItem('auth:token'))
+      if (target === 'dashboard' && signedIn) {
+        // Signed-in root: empty stack, so the app-level Back stays hidden
+        setNavStack([])
         setScreen('dashboard')
+      } else if (target && !signedIn) {
+        localStorage.removeItem('nav:target')
       }
     } catch {}
     
@@ -146,12 +154,14 @@ export default function App() {
                 Back
               </button>
             )}
-            <span data-testid="role-badge" className="inline-flex items-center gap-1 rounded-full bg-brand/10 px-3 py-1.5 text-sm font-medium text-brand ring-1 ring-brand/30">
-              {ROLE_LABELS[role] || role}
-            </span>
+            {isLoggedIn && (
+              <span data-testid="role-badge" className="inline-flex items-center gap-1 rounded-full bg-brand/10 px-3 py-1.5 text-sm font-medium text-brand ring-1 ring-brand/30">
+                {ROLE_LABELS[role] || role}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            {(role === 'EPHSRUAdmin' || role === 'ZoneCoordinator' || role === 'SchoolAdmin' || role === 'Coach') && (
+            {isLoggedIn && (role === 'EPHSRUAdmin' || role === 'ZoneCoordinator' || role === 'SchoolAdmin' || role === 'Coach') && (
               <button
                 data-testid="btn-create-user"
                 onClick={() => navigate('create-user')}
@@ -161,29 +171,31 @@ export default function App() {
                 Create User
               </button>
             )}
+            {isLoggedIn && (
             <button
               data-testid="btn-logout"
               onClick={() => {
-                localStorage.removeItem('auth:token')
-                localStorage.removeItem('auth:role')
-                localStorage.removeItem('auth:email')
-                localStorage.removeItem('auth:zoneId')
-                localStorage.removeItem('auth:schoolId')
+                // Clear the whole session INCLUDING nav:target — otherwise the
+                // reload boots straight back into an empty dashboard.
+                for (const k of ['auth:token', 'auth:role', 'auth:email', 'auth:zoneId', 'auth:schoolId', 'auth:name', 'auth:surname', 'nav:target', 'reg:email', 'reg:password', 'reg:adminRole', 'reg:form']) {
+                  try { localStorage.removeItem(k) } catch {}
+                }
                 setRole('Player')
-                navigate('home', { reset: true })
-                window.location.reload()
+                window.location.replace('/')
               }}
               className="flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-100"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
               Logout
             </button>
+            )}
           </div>
         </div>
         {screen === 'home' && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Screen title="Sign In" subtitle="Already registered? Sign in to your dashboard.">
-              <Login onRole={setRole} onSuccess={() => navigate('dashboard')} />
+              {/* reset: the dashboard is the signed-in root — no "Back" to the sign-in page */}
+              <Login onRole={setRole} onSuccess={() => navigate('dashboard', { reset: true })} />
             </Screen>
             <Screen title="Request Access" subtitle="Need an account? Contact your administrator.">
               <div className="space-y-4">
@@ -208,7 +220,7 @@ export default function App() {
         {screen === 'coach' && <Screen title="Coach Registration"><CoachForm role={role} onGoLogin={() => navigate('login')} onGoDashboard={() => navigate('dashboard')} /></Screen>}
         {screen === 'referee' && <Screen title="Referee Registration"><RefereeForm role={role} /></Screen>}
         {screen === 'admin' && <Screen title="Admin Registration"><AdminForm role={role} /></Screen>}
-        {screen === 'login' && <Screen title="Sign In"><Login onRole={setRole} onSuccess={() => navigate('dashboard')} /></Screen>}
+        {screen === 'login' && <Screen title="Sign In"><Login onRole={setRole} onSuccess={() => navigate('dashboard', { reset: true })} /></Screen>}
         {screen === 'approvals' && <Screen title="Approvals"><Approvals /></Screen>}
         {screen === 'reports' && <Screen title="Reports"><Reports /></Screen>}
         {screen === 'dashboard' && <Screen title="Dashboard"><Dashboard role={role} /></Screen>}
