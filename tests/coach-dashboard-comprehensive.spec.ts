@@ -280,14 +280,18 @@ test('Coach dashboard: add player, pending review, approvals, and migration visi
   await expect(page.locator('[data-folder-level="gender"]')).toBeVisible()
   {
     const genderBox = page.locator('[data-folder-level="gender"]')
-    const genderBtns = genderBox.getByRole('button')
+    // Coach B's roster loads asynchronously after login/migration — wait for the
+    // gender folders to actually populate before drilling in (under heavy
+    // parallel load the container renders before the fetch resolves).
+    await expect(genderBox.locator('[data-folder-item="folder"]').first()).toBeVisible({ timeout: 20000 })
+    const genderBtns = genderBox.locator('[data-folder-item="folder"]')
     const n = await genderBtns.count()
     expect(n).toBeGreaterThan(0)
     let found = false
     for (let i = 0; i < n; i++) {
       await genderBtns.nth(i).click()
       const teamBox = page.locator('[data-folder-level="team"]')
-      const u17Btn = teamBox.getByRole('button', { name: /^U17\s+Items:/i })
+      const u17Btn = teamBox.getByRole('button', { name: /^U17\s+\d+\s+player/i })
       if (!(await u17Btn.count())) {
         await page.locator('div.text-sm.font-semibold').getByText('Teams', { exact: true }).click()
         continue

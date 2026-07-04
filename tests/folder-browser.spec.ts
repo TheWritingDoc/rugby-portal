@@ -56,27 +56,27 @@ test('Coach folder browser shows players and captures screenshot', async ({ page
   const folderContainer = page.locator('div.rounded-lg.border.bg-white.p-3.shadow').first()
   await folderContainer.waitFor({ timeout: 20000 })
 
-  // Click down the hierarchy: team → position → gender → age
+  // Click down the hierarchy: gender → team. Scope to the folder browser so
+  // header chrome (My Profile, Messages, etc.) is never mistaken for a folder.
   const clickFirstItem = async () => {
-    const btns = page.locator('button')
-    const count = await btns.count()
-    if (count === 0) await page.waitForTimeout(200)
-    const firstBtn = page.locator('button').first()
+    // At the players (leaf) level there are no folders left to drill — no-op.
+    const folders = folderContainer.locator('[data-folder-item="folder"]')
+    if ((await folders.count()) === 0) return
+    const firstBtn = folders.first()
     await expect(firstBtn).toBeVisible({ timeout: 20000 })
     await firstBtn.hover()
     await firstBtn.click()
   }
-  // Deterministic drill using seeded data: team → position → gender → age
   const clickByText = async (texts: string[]) => {
     for (const t of texts) {
-      const btn = page.getByRole('button', { name: t })
+      const btn = folderContainer.locator('[data-folder-item="folder"]').filter({ hasText: t }).first()
       if (await btn.isVisible().catch(() => false)) {
         await btn.hover()
         await btn.click()
         return true
       }
     }
-    // fallback: click first
+    // fallback: click first folder
     await clickFirstItem()
     return false
   }

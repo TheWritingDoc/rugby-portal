@@ -2352,19 +2352,129 @@ function findOwnRow(user, cb) {
   db.get(`SELECT * FROM ${table} WHERE lower(email) = ?`, [email], (err, row) => cb(err, row ? { table, row } : null))
 }
 
+// Shape the own-profile payload consistently for GET and PUT. Extra role
+// fields (qualifications, availability, …) live in the JSON `data` blob so the
+// same response works for players, coaches, referees and admins alike.
+function profileFromRow(user, found) {
+  if (!found) return { role: user.role, email: user.email }
+  const d = (() => { try { return JSON.parse(found.row.data || '{}') } catch { return {} } })()
+  return {
+    role: user.role,
+    email: user.email,
+    id: found.row.id,
+    name: found.row.name || d.name || '',
+    surname: found.row.surname || d.surname || '',
+    contactNumber: found.row.contactNumber || d.contactNumber || d.phone || '',
+    photoUrl: d.photoUrl || '',
+    qualifications: d.qualifications || found.row.qualifications || '',
+    experience: d.experience || found.row.experience || '',
+    position: d.position || '',
+    availability: d.availability || '',
+    address: d.address || '',
+    bio: d.bio || '',
+    title: d.title || '',
+    zoneId: found.row.zoneId || d.zoneId || '',
+    schoolId: found.row.schoolId || d.schoolId || '',
+  }
+}
+
 app.get('/api/me', (req, res) => {
   if (!req.user?.role || !req.user?.email) return res.status(403).json({ error: 'forbidden' })
   findOwnRow(req.user, (err, found) => {
     if (err) return res.status(500).json({ error: err.message })
-    if (!found) return res.json({ role: req.user.role, email: req.user.email })
-    const d = (() => { try { return JSON.parse(found.row.data || '{}') } catch { return {} } })()
-    res.json({
-      role: req.user.role,
-      email: req.user.email,
-      id: found.row.id,
-      name: found.row.name || d.name || '',
-      surname: found.row.surname || d.surname || '',
-      photoUrl: d.photoUrl || '',
+    res.json(profileFromRow(req.user, found))
+  })
+})
+
+// Fields a user may change on their own record. Identity and scope
+// (email, role, id, zone/school) stay fixed by whoever created the account.
+const ME_EDITABLE = ['qualifications', 'experience', 'position', 'availability', 'address', 'bio', 'title']
+
+app.put('/api/me', (req, res) => {
+  if (!req.user?.role || !req.user?.email) return res.status(403).json({ error: 'forbidden' })
+  findOwnRow(req.user, (err, found) => {
+    if (err) return res.status(500).json({ error: err.message })
+    if (!found) return res.status(404).json({ error: 'no_profile_record' })
+    let d = {}
+    try { d = JSON.parse(found.row.data || '{}') } catch {}
+    const body = req.body || {}
+    for (const k of ME_EDITABLE) {
+      if (Object.prototype.hasOwnProperty.call(body, k)) d[k] = typeof body[k] === 'string' ? body[k].trim() : body[k]
+    }
+    const name = String((body.name ?? found.row.name) || '').trim()
+    const surname = String((body.surname ?? found.row.surname) || '').trim()
+    const contactNumber = String((body.contactNumber ?? body.phone ?? found.row.contactNumber) || '').trim()
+    if (!name || !surname) return res.status(400).json({ error: 'name_and_surname_required' })
+    d.name = name; d.surname = surname; d.contactNumber = contactNumber; d.phone = contactNumber
+    const before = { name: found.row.name, surname: found.row.surname }
+    db.run(
+      `UPDATE ${found.table} SET name = ?, surname = ?, contactNumber = ?, data = ? WHERE id = ?`,
+      [name, surname, contactNumber, JSON.stringify(d), found.row.id],
+      function (uerr) {
+        if (uerr) return res.status(500).json({ error: uerr.message })
+        writeAudit(req.user.role, found.table, 'update', before, { id: found.row.id, name, surname })
+        res.json(profileFromRow(req.user, { table: found.table, row: { ...found.row, name, surname, contactNumber, data: JSON.stringify(d) } }))
+      }
+    )
+  })
+})
+
+// Personal document locker — every signed-in user can list, upload and remove
+// their own documents (certificates, IDs, clearances). Stored in the shared
+// `documents` table keyed to the user's own record so the existing reviewer
+// scoping still surfaces them to the relevant school/zone admins.
+const ME_DOC_TYPE = { Player: 'player', Coach: 'coach', Referee: 'referee', SchoolAdmin: 'admin', ZoneCoordinator: 'admin', EPHSRUAdmin: 'admin' }
+
+app.get('/api/me/documents', (req, res) => {
+  if (!req.user?.role || !req.user?.email) return res.status(403).json({ error: 'forbidden' })
+  findOwnRow(req.user, (err, found) => {
+    if (err) return res.status(500).json({ error: err.message })
+    if (!found) return res.json([])
+    const ownerType = ME_DOC_TYPE[req.user.role] || 'user'
+    db.all('SELECT * FROM documents WHERE ownerType = ? AND ownerId = ? ORDER BY ts DESC', [ownerType, found.row.id], (e, rows) => {
+      if (e) return res.status(500).json({ error: e.message })
+      res.json(rows || [])
+    })
+  })
+})
+
+app.post('/api/me/documents', (req, res) => {
+  if (!req.user?.role || !req.user?.email) return res.status(403).json({ error: 'forbidden' })
+  const fileName = String(req.body?.fileName || '').trim()
+  const fileUrl = String(req.body?.fileUrl || '').trim()
+  if (!fileName || !fileUrl) return res.status(400).json({ error: 'file_required' })
+  findOwnRow(req.user, (err, found) => {
+    if (err) return res.status(500).json({ error: err.message })
+    if (!found) return res.status(404).json({ error: 'no_profile_record' })
+    const ownerType = ME_DOC_TYPE[req.user.role] || 'user'
+    const id = crypto.randomUUID()
+    const ts = Date.now()
+    db.run(
+      'INSERT INTO documents (id, ownerType, ownerId, fileName, fileUrl, status, ts) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [id, ownerType, found.row.id, fileName, fileUrl, 'approved', ts],
+      function (ierr) {
+        if (ierr) return res.status(500).json({ error: ierr.message })
+        writeAudit(req.user.role, 'documents', 'create', null, { id, ownerType, ownerId: found.row.id, fileName })
+        res.json({ id, ownerType, ownerId: found.row.id, fileName, fileUrl, status: 'approved', ts })
+      }
+    )
+  })
+})
+
+app.delete('/api/me/documents/:id', (req, res) => {
+  if (!req.user?.role || !req.user?.email) return res.status(403).json({ error: 'forbidden' })
+  findOwnRow(req.user, (err, found) => {
+    if (err) return res.status(500).json({ error: err.message })
+    if (!found) return res.status(404).json({ error: 'no_profile_record' })
+    const ownerType = ME_DOC_TYPE[req.user.role] || 'user'
+    db.get('SELECT * FROM documents WHERE id = ?', [req.params.id], (gerr, doc) => {
+      if (gerr) return res.status(500).json({ error: gerr.message })
+      if (!doc || String(doc.ownerId) !== String(found.row.id) || String(doc.ownerType) !== ownerType) return res.status(404).json({ error: 'not_found' })
+      db.run('DELETE FROM documents WHERE id = ?', [req.params.id], function (derr) {
+        if (derr) return res.status(500).json({ error: derr.message })
+        writeAudit(req.user.role, 'documents', 'delete', doc, null)
+        res.json({ ok: true, id: req.params.id })
+      })
     })
   })
 })

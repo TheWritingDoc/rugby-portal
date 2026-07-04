@@ -26,6 +26,7 @@ import EPHSRUAdminDashboard from '../components/dashboards/EPHSRUAdminDashboard'
 import SeasonFilter from '../components/SeasonFilter'
 import Messages from '../components/Messages'
 import MyPhoto from '../components/MyPhoto'
+import MyProfile from '../components/MyProfile'
 import ShowMoreButton from '../components/ShowMoreButton'
 import { currentSeasonYear, filterBySeason, seasonsPresent, archivedCount, seasonYearOf } from '../utils/season'
 import { schoolNameOf, zoneNameOf } from '../utils/labels'
@@ -165,7 +166,10 @@ export default function Dashboard({ role }: { role: Role }) {
         {(role === 'Coach' || role === 'SchoolAdmin' || role === 'Player') && schoolNameTop ? (
           <h1 className="text-xl font-bold">{schoolNameTop}</h1>
         ) : <span />}
-        <MyPhoto />
+        <div className="flex items-center gap-2">
+          <MyPhoto />
+          <MyProfile />
+        </div>
       </div>
       <Messages />
       {role === 'Player' ? (
@@ -1169,6 +1173,14 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
     }
     return seen.size
   }, [listFiltered])
+  const teamsCount = useMemo(() => {
+    const set = new Set<string>()
+    for (const p of list) {
+      const t = String(p?.data?.team ?? p?.data?.ageGroup ?? '').trim()
+      if (t) set.add(t)
+    }
+    return set.size
+  }, [list])
   const listSorted = [...list].sort((a, b) => {
     const ap = isPending(a)
     const bp = isPending(b)
@@ -1349,6 +1361,50 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
               <div className="text-4xl font-bold">{listFilteredUniqueCount}</div>
               <div className="text-blue-100 text-sm">Active Players</div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* At-a-glance stats — the numbers a coach checks first */}
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+            <Users className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-2xl font-bold leading-none text-gray-900">{listFilteredUniqueCount}</div>
+            <div className="mt-1 truncate text-xs font-medium text-gray-500">Players</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setActiveTab('pending')}
+          className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left shadow-sm transition-colors ${pendingSummary.total > 0 ? 'border-amber-200 bg-amber-50 hover:bg-amber-100' : 'border-gray-200 bg-white hover:bg-gray-50'}`}
+        >
+          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${pendingSummary.total > 0 ? 'bg-amber-100 text-amber-600' : 'bg-gray-100 text-gray-400'}`}>
+            <AlertCircle className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <div className={`text-2xl font-bold leading-none ${pendingSummary.total > 0 ? 'text-amber-700' : 'text-gray-900'}`}>{pendingSummary.total}</div>
+            <div className="mt-1 truncate text-xs font-medium text-gray-500">Needs review</div>
+          </div>
+        </button>
+        <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+            <LayoutGrid className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-2xl font-bold leading-none text-gray-900">{teamsCount}</div>
+            <div className="mt-1 truncate text-xs font-medium text-gray-500">Teams</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+            <Calendar className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-2xl font-bold leading-none text-gray-900">{currentSeasonYear()}</div>
+            <div className="mt-1 truncate text-xs font-medium text-gray-500">Season</div>
           </div>
         </div>
       </div>
@@ -1573,36 +1629,50 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
       {/* Players Tab */}
       {activeTab === 'players' && (
       <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="inline-flex items-center rounded-full bg-brand/10 px-3 py-1 text-sm font-semibold text-brand ring-1 ring-brand/30 shadow-sm">
-          <Users size={16} className="mr-1" />
-          <span>{hierView && folderStats ? folderStats.count : listFilteredUniqueCount}</span>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        {/* How to look at your squad: browse by team folder, or search across everyone */}
+        <div>
+          <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-400">View</div>
+          <div className="inline-flex overflow-hidden rounded-md border border-gray-200 bg-white shadow-sm">
+            <button
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium transition-colors ${hierView ? 'bg-brand text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+              onClick={() => setHierView(true)}
+              type="button"
+            >
+              <LayoutGrid size={15} aria-hidden="true" />
+              Browse
+            </button>
+            <button
+              className={`inline-flex items-center gap-1.5 border-l border-gray-200 px-3.5 py-2 text-sm font-medium transition-colors ${!hierView ? 'bg-brand text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+              onClick={() => setHierView(false)}
+              type="button"
+            >
+              <Search size={15} aria-hidden="true" />
+              Search
+            </button>
+          </div>
         </div>
-        {hierView && folderStats && (
-          <div className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700 ring-1 ring-gray-300">Year: {folderStats.year}</div>
-        )}
-        <button className="rounded-md border px-3 py-2" onClick={() => setActiveTab('pending')}>Review</button>
-        <div className="inline-flex overflow-hidden rounded-md border">
+
+        {/* Actions: everyday primary action (Add) stands apart from occasional tools */}
+        <div className="flex flex-wrap items-center gap-2">
+          {(role === 'Coach' || role === 'SchoolAdmin' || role === 'EPHSRUAdmin') && (
+            <button
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors ${showMigration ? 'bg-blue-600 text-white hover:bg-blue-700' : 'border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+              onClick={() => setShowMigration((v) => !v)}
+            >
+              <School size={15} aria-hidden="true" />
+              {showMigration ? 'Close Migration' : 'Migrate'}
+            </button>
+          )}
+          <ExportMenu players={hierView ? list : listFiltered} schoolName={schoolName} logoUrl={schoolLogo} />
           <button
-            className={`px-3 py-2 text-sm ${hierView ? 'bg-gray-100 font-semibold' : ''}`}
-            onClick={() => setHierView(true)}
-            type="button"
+            className={`inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition-colors ${adding ? 'border border-gray-200 text-gray-600 hover:bg-gray-50' : 'bg-brand text-white hover:brightness-110'}`}
+            onClick={() => setAdding((v) => !v)}
           >
-            Browse
-          </button>
-          <button
-            className={`px-3 py-2 text-sm ${!hierView ? 'bg-gray-100 font-semibold' : ''}`}
-            onClick={() => setHierView(false)}
-            type="button"
-          >
-            Search
+            {adding ? <X size={15} aria-hidden="true" /> : <span className="text-base leading-none" aria-hidden="true">+</span>}
+            {adding ? 'Cancel' : 'Add Player'}
           </button>
         </div>
-        {(role === 'Coach' || role === 'SchoolAdmin' || role === 'EPHSRUAdmin') && (
-          <button className={`rounded-md px-3 py-2 ${showMigration ? 'bg-blue-600 text-white' : 'border'}`} onClick={() => setShowMigration((v) => !v)}>{showMigration ? 'Close Migration' : 'Migrate Player'}</button>
-        )}
-        <ExportMenu players={hierView ? list : listFiltered} schoolName={schoolName} logoUrl={schoolLogo} />
-        <button className="rounded-md bg-brand px-3 py-2 text-white" onClick={() => setAdding((v) => !v)}>{adding ? 'Cancel' : 'Add Player'}</button>
       </div>
 
       {showMigration && (
@@ -1648,18 +1718,28 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
       )}
 
       {!hierView && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-4">
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={pendingOnly} onChange={(e) => setPendingOnly(e.target.checked)} />
-              Show only players needing review
-            </label>
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={currentSeasonOnly} onChange={(e) => setCurrentSeasonOnly(e.target.checked)} />
-              Current season only ({currentSeasonYear()})
-            </label>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              aria-pressed={pendingOnly}
+              onClick={() => setPendingOnly((v) => !v)}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${pendingOnly ? 'bg-amber-100 text-amber-700 ring-1 ring-amber-300' : 'bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-100'}`}
+            >
+              <AlertCircle size={14} aria-hidden="true" />
+              Needs review
+            </button>
+            <button
+              type="button"
+              aria-pressed={currentSeasonOnly}
+              onClick={() => setCurrentSeasonOnly((v) => !v)}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${currentSeasonOnly ? 'bg-brand/10 text-brand ring-1 ring-brand/30' : 'bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-100'}`}
+            >
+              <Calendar size={14} aria-hidden="true" />
+              {currentSeasonYear()} season
+            </button>
           </div>
-          <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Player view">
+          <div className="inline-flex overflow-hidden rounded-md border bg-white shadow-sm" role="group" aria-label="Player view">
             <button
               type="button"
               aria-label="List view"
@@ -2132,11 +2212,13 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
   }
   return (
     <div className="rounded-lg border bg-white p-3 shadow">
-      <div className="mb-3 flex flex-wrap gap-2" data-folder-level="year">
+      <div className="mb-4">
+        <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-gray-400">Season</div>
+        <div className="flex flex-wrap gap-2" data-folder-level="year">
         {years.map((y) => (
           <button
             key={y}
-            className={y === yearSel ? 'rounded-full bg-brand px-3 py-1 text-sm font-semibold text-white' : 'rounded-full border px-3 py-1 text-sm'}
+            className={y === yearSel ? 'rounded-full bg-brand px-4 py-1.5 text-sm font-semibold text-white shadow-sm' : 'rounded-full border border-gray-200 bg-white px-4 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50'}
             onClick={() => {
               if (y !== yearSel) {
                 yearTouchedRef.current = true
@@ -2151,13 +2233,14 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
             {y}
           </button>
         ))}
+        </div>
       </div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-semibold">
-          <span className="underline cursor-pointer" onClick={() => { setGenderSel(null); setTeamSel(null) }}>Teams</span>
-          <> / <span className="underline cursor-pointer" onClick={() => { setGenderSel(null); setTeamSel(null) }}>{yearSel}</span></>
-          {genderSel && <> / <span className="underline cursor-pointer" onClick={() => { setTeamSel(null) }}>{genderSel}</span></>}
-          {teamSel && <> / <span className="underline">{teamSel}</span></>}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-gray-50 px-3 py-2">
+        <div className="text-sm font-semibold text-gray-700">
+          <span className="cursor-pointer text-brand hover:underline" onClick={() => { setGenderSel(null); setTeamSel(null) }}>Teams</span>
+          <> / <span className="cursor-pointer text-brand hover:underline" onClick={() => { setGenderSel(null); setTeamSel(null) }}>{yearSel}</span></>
+          {genderSel && <> / <span className="cursor-pointer text-brand hover:underline" onClick={() => { setTeamSel(null) }}>{genderSel}</span></>}
+          {teamSel && <> / <span className="text-gray-900">{teamSel}</span></>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {level === 'players' && reregisterTargets.length > 0 && (
@@ -2209,20 +2292,26 @@ function CoachFolderBrowser({ players, onSelect, currentYearOnly, onStats, viewM
         </div>
       </div>
       {level !== 'players' ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4" data-folder-level={level}>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3" data-folder-level={level}>
           {filteredItems.map((it: any) => (
-            <button key={it.name} data-folder-item="folder" className="flex items-center justify-between rounded-md border p-3 text-left hover:bg-gray-50 transition" onClick={() => {
+            <button key={it.name} data-folder-item="folder" className="group flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3 text-left shadow-sm transition-all hover:border-brand/40 hover:shadow-md" onClick={() => {
               if (level === 'gender') setGenderSel(it.name)
               else setTeamSel(it.name)
             }}>
-              <div>
-                <div className="text-sm font-semibold">{it.name}</div>
-                <div className="text-xs text-gray-600">Items: {it.count}</div>
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand/10 text-brand transition-colors group-hover:bg-brand group-hover:text-white">
+                {level === 'gender' ? <Users size={20} aria-hidden="true" /> : <Shield size={20} aria-hidden="true" />}
               </div>
-              <div className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 ring-1 ring-gray-300">{it.count}</div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-gray-900">{it.name}</div>
+                <div className="text-xs text-gray-500">{it.count} player{it.count === 1 ? '' : 's'}</div>
+              </div>
+              <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 ring-1 ring-gray-200 transition-colors group-hover:bg-brand/10 group-hover:text-brand">{it.count}</span>
+              <ChevronDown size={16} className="-ml-1 shrink-0 -rotate-90 text-gray-300 transition-colors group-hover:text-brand" aria-hidden="true" />
             </button>
           ))}
-          {filteredItems.length === 0 && <div className="py-2 text-sm text-gray-600">No folders</div>}
+          {filteredItems.length === 0 && (
+            <div className="col-span-full rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 py-8 text-center text-sm text-gray-500">No folders here yet</div>
+          )}
         </div>
       ) : (
         <div className={`transition-opacity duration-150 ${switching ? 'opacity-0' : 'opacity-100'}`}>
