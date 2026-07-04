@@ -17,6 +17,7 @@ import CoachCard from '../CoachCard'
 import { zoneNameOf } from '../../utils/labels'
 import PlayerProfileModal from '../modals/PlayerProfileModal'
 import StaffProfileModal from '../modals/StaffProfileModal'
+import SchoolPeopleBrowser from '../SchoolPeopleBrowser'
 
 interface ZoneCoordinatorDashboardProps {
   zone?: string
@@ -228,91 +229,16 @@ export default function ZoneCoordinatorDashboard({
             </div>
           </div>
 
-          {/* Everyone attached to this school: admins, referees, coaches, players */}
-          {(() => {
-            const schoolAdminsHere = admins.filter((a) => (a.role === 'SchoolAdmin' || a.data?.role === 'SchoolAdmin') && String(a.data?.schoolId || a.schoolId || '') === String(selectedSchool.id))
-            const schoolRefereesHere = referees.filter((r) => String(r.data?.schoolId || '') === String(selectedSchool.id))
-            if (schoolAdminsHere.length === 0 && schoolRefereesHere.length === 0) return null
-            return (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-                {schoolAdminsHere.length > 0 && (
-                  <div>
-                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                      <Shield className="h-5 w-5 text-blue-600" /> School Admins
-                    </h3>
-                    <div className="space-y-2">
-                      {schoolAdminsHere.map((a) => (
-                        <button key={a.id} type="button" onClick={() => setViewingStaff({ person: a, role: 'SchoolAdmin' })}
-                          className="flex w-full items-center gap-3 rounded-lg border bg-blue-50 border-blue-100 p-3 text-left hover:bg-blue-100 transition-colors">
-                          <div className="h-10 w-10 shrink-0 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold">
-                            {(a.data?.name?.[0] || '')}{(a.data?.surname?.[0] || '')}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="font-medium text-gray-900 truncate">{a.data?.name} {a.data?.surname}</div>
-                            <div className="text-xs text-gray-500 truncate">{a.data?.email || a.email}</div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {schoolRefereesHere.length > 0 && (
-                  <div>
-                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                      <Award className="h-5 w-5 text-amber-600" /> Referees
-                    </h3>
-                    <div className="space-y-2">
-                      {schoolRefereesHere.map((r) => (
-                        <button key={r.id} type="button" onClick={() => setViewingStaff({ person: r, role: 'Referee' })}
-                          className="flex w-full items-center gap-3 rounded-lg border bg-amber-50 border-amber-100 p-3 text-left hover:bg-amber-100 transition-colors">
-                          <div className="h-10 w-10 shrink-0 rounded-full bg-amber-200 flex items-center justify-center text-amber-700 font-bold">
-                            {(r.data?.name?.[0] || r.name?.[0] || '')}{(r.data?.surname?.[0] || r.surname?.[0] || '')}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="font-medium text-gray-900 truncate">{r.data?.name || r.name} {r.data?.surname || r.surname}</div>
-                            <div className="text-xs text-gray-500 truncate">{r.qualifications || r.data?.refereeLevel || 'Referee'}{r.data?.email || r.email ? ` • ${r.data?.email || r.email}` : ''}</div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )
-          })()}
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div>
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <UserCheck className="h-5 w-5 text-purple-600" /> Coaches
-              </h3>
-              <div className="space-y-3">
-                {schoolCoaches.map(coach => (
-                  <div key={coach.id} onClick={() => setViewingStaff({ person: coach, role: 'Coach' })} className="cursor-pointer" title="View coach profile">
-                    <CoachCard coach={coach} />
-                  </div>
-                ))}
-                {schoolCoaches.length === 0 && <p className="text-gray-500 italic">No coaches assigned</p>}
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <Users className="h-5 w-5 text-blue-600" /> Players
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {schoolPlayers.map(player => (
-                  <PlayerCard
-                    key={player.id}
-                    player={player}
-                    badge={player.data?.team || player.data?.ageGroup || '—'}
-                    onClick={() => setViewingPlayer(player)}
-                  />
-                ))}
-                {schoolPlayers.length === 0 && <p className="text-gray-500 italic col-span-full">No players registered</p>}
-              </div>
-            </div>
-          </div>
+          {/* Organised folder view: staff first, then one collapsible folder per team */}
+          <SchoolPeopleBrowser
+            schoolId={String(selectedSchool.id)}
+            players={players}
+            coaches={coaches}
+            referees={referees}
+            admins={admins}
+            onViewPlayer={(p) => setViewingPlayer(p)}
+            onViewStaff={(person, role) => setViewingStaff({ person, role })}
+          />
         </div>
 
         {viewingPlayer && (
