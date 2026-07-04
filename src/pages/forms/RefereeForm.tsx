@@ -7,6 +7,7 @@ import { addEntity } from '../../utils/db'
 import { safePost } from '../../utils/api'
 import { loadDraft, saveDraft, clearDraft } from '../../utils/storage'
 import { login, getToken } from '../../utils/auth'
+import PhotoField from '../../components/PhotoField'
 import bcrypt from 'bcryptjs'
 
 export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'Coach' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin' }) {
@@ -21,6 +22,7 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
   const [refereeLevel, setRefereeLevel] = useState('Provincial')
   const [yearsExperience, setYearsExperience] = useState('')
   const [availability, setAvailability] = useState<string[]>([])
+  const [photoUrl, setPhotoUrl] = useState('')
   useEffect(() => {
     const d = loadDraft<any>('referee')
     if (d) {
@@ -52,7 +54,7 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
     const payload = {
       name, surname, idNumber, dob, phone, email, zoneId: zone, passwordHash,
       qualifications: refereeLevel, experience: yearsExperience,
-      refereeLevel, yearsExperience, availability,
+      refereeLevel, yearsExperience, availability, photoUrl,
       schoolId: creatorSchool,
     }
     // Keep the creator's session (the school admin stays signed in); only fall
@@ -104,6 +106,7 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
           <span className="text-sm font-medium">Email Address</span>
           <input type="email" className="mt-1 w-full rounded-md border p-2" value={email} onChange={(e) => setEmail(e.target.value)} />
         </label>
+        <PhotoField value={photoUrl} onChange={setPhotoUrl} ensureAuth={() => login('Referee', zone)} />
       </div>
       <fieldset className="rounded-md border p-3">
         <legend className="px-2 text-sm font-semibold">Qualification Details</legend>

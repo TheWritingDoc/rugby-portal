@@ -7,6 +7,7 @@ import { addEntity } from '../../utils/db'
 import { safePost } from '../../utils/api'
 import { loadDraft, saveDraft, clearDraft } from '../../utils/storage'
 import { login, getToken } from '../../utils/auth'
+import PhotoField from '../../components/PhotoField'
 import bcrypt from 'bcryptjs'
 
 const ROLE_LABELS: Record<string, string> = {
@@ -25,6 +26,7 @@ export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coa
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [roleSel, setRoleSel] = useState<'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin'>('SchoolAdmin')
+  const [photoUrl, setPhotoUrl] = useState('')
   useEffect(() => {
     const d = loadDraft<any>('admin')
     if (d) {
@@ -50,7 +52,7 @@ export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coa
     if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
     if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID number')
     const passwordHash = password ? bcrypt.hashSync(password, 10) : undefined
-    const payload = { name, surname, idNumber, phone, email, role: roleSel, zoneId: zone, schoolId: school, passwordHash }
+    const payload = { name, surname, idNumber, phone, email, role: roleSel, zoneId: zone, schoolId: school, passwordHash, photoUrl }
     // Keep the creator's session (EPHSRU admin / zone coordinator stays signed
     // in) — the server checks THEIR authority to create this admin role.
     if (!getToken()) await login('EPHSRUAdmin', zone, school)
@@ -98,6 +100,7 @@ export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coa
           <span className="text-sm font-medium">Email Address</span>
           <input type="email" className="mt-1 w-full rounded-md border p-2" value={email} onChange={(e) => setEmail(e.target.value)} />
         </label>
+        <PhotoField value={photoUrl} onChange={setPhotoUrl} ensureAuth={() => login('EPHSRUAdmin', zone, school)} />
       </div>
       <fieldset className="rounded-md border p-3">
         <legend className="px-2 text-sm font-semibold">Administrative Role</legend>

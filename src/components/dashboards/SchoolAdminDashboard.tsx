@@ -6,7 +6,7 @@ import {
   Download, Search, Plus, Edit, Trash2, Mail, Phone,
   BarChart3, PieChart as PieChartIcon,
   List as ListIcon, LayoutGrid, Folder, ChevronLeft,
-  CheckCircle, XCircle, Eye
+  CheckCircle, XCircle, Eye, Camera
 } from 'lucide-react'
 import { fetchList, postJson, putJson, deleteJson } from '../../utils/api'
 import { ensureSession } from '../../utils/auth'
@@ -357,8 +357,10 @@ export default function SchoolAdminDashboard({
                     <School className="h-10 w-10 text-blue-100" />
                   </div>
                 )}
-                <label className="absolute inset-x-0 -bottom-2 mx-auto w-fit cursor-pointer rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-semibold text-blue-900 shadow opacity-0 transition group-hover:opacity-100">
-                  {schoolLogo ? 'Change emblem' : 'Add emblem'}
+                {/* Always visible — school admins must not need to discover a hover */}
+                <label className="absolute inset-x-0 -bottom-2 mx-auto flex w-fit cursor-pointer items-center gap-1 rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-semibold text-blue-900 shadow transition hover:bg-white">
+                  <Camera className="h-3 w-3" aria-hidden="true" />
+                  {schoolLogo ? 'Change logo' : 'Upload school logo'}
                   <input
                     type="file"
                     accept="image/*"

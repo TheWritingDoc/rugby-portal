@@ -2340,6 +2340,53 @@ app.post('/api/notifications/read-all', (req, res) => {
 })
 
 // ===========================================================================
+// Own profile: every signed-in user can read their row and set their photo.
+// ===========================================================================
+const ME_TABLES = { Player: 'players', Coach: 'coaches', Referee: 'referees', SchoolAdmin: 'admins', ZoneCoordinator: 'admins', EPHSRUAdmin: 'admins' }
+
+function findOwnRow(user, cb) {
+  const table = ME_TABLES[user?.role]
+  const email = String(user?.email || '').trim().toLowerCase()
+  if (!table || !email) return cb(null, null)
+  db.get(`SELECT * FROM ${table} WHERE lower(email) = ?`, [email], (err, row) => cb(err, row ? { table, row } : null))
+}
+
+app.get('/api/me', (req, res) => {
+  if (!req.user?.role || !req.user?.email) return res.status(403).json({ error: 'forbidden' })
+  findOwnRow(req.user, (err, found) => {
+    if (err) return res.status(500).json({ error: err.message })
+    if (!found) return res.json({ role: req.user.role, email: req.user.email })
+    const d = (() => { try { return JSON.parse(found.row.data || '{}') } catch { return {} } })()
+    res.json({
+      role: req.user.role,
+      email: req.user.email,
+      id: found.row.id,
+      name: found.row.name || d.name || '',
+      surname: found.row.surname || d.surname || '',
+      photoUrl: d.photoUrl || '',
+    })
+  })
+})
+
+app.post('/api/me/photo', (req, res) => {
+  if (!req.user?.role || !req.user?.email) return res.status(403).json({ error: 'forbidden' })
+  const photoUrl = String(req.body?.photoUrl || '').trim()
+  if (!photoUrl) return res.status(400).json({ error: 'photoUrl_required' })
+  findOwnRow(req.user, (err, found) => {
+    if (err) return res.status(500).json({ error: err.message })
+    if (!found) return res.status(404).json({ error: 'no_profile_record' })
+    let d = {}
+    try { d = JSON.parse(found.row.data || '{}') } catch {}
+    d.photoUrl = photoUrl
+    db.run(`UPDATE ${found.table} SET data = ? WHERE id = ?`, [JSON.stringify(d), found.row.id], function (uerr) {
+      if (uerr) return res.status(500).json({ error: uerr.message })
+      writeAudit(req.user.role, found.table, 'photo_update', null, { id: found.row.id })
+      res.json({ ok: true, photoUrl })
+    })
+  })
+})
+
+// ===========================================================================
 // Scoped messaging — communication follows the reporting hierarchy. Each role
 // may only message its direct superior(s) and direct report(s):
 //   EPHSRUAdmin     <-> ZoneCoordinators (all zones)

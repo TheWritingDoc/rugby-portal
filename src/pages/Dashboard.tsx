@@ -25,6 +25,7 @@ import ZoneCoordinatorDashboard from '../components/dashboards/ZoneCoordinatorDa
 import EPHSRUAdminDashboard from '../components/dashboards/EPHSRUAdminDashboard'
 import SeasonFilter from '../components/SeasonFilter'
 import Messages from '../components/Messages'
+import MyPhoto from '../components/MyPhoto'
 import { currentSeasonYear, filterBySeason, seasonsPresent, archivedCount, seasonYearOf } from '../utils/season'
 import { schoolNameOf, zoneNameOf } from '../utils/labels'
 import { resizeImage } from '../utils/image'
@@ -159,9 +160,12 @@ export default function Dashboard({ role }: { role: Role }) {
   }
   return (
     <section>
-      {(role === 'Coach' || role === 'SchoolAdmin' || role === 'Player') && schoolNameTop && (
-        <h1 className="mb-3 text-xl font-bold">{schoolNameTop}</h1>
-      )}
+      <div className="mb-3 flex items-center justify-between gap-3">
+        {(role === 'Coach' || role === 'SchoolAdmin' || role === 'Player') && schoolNameTop ? (
+          <h1 className="text-xl font-bold">{schoolNameTop}</h1>
+        ) : <span />}
+        <MyPhoto />
+      </div>
       <Messages />
       {role === 'Player' ? (
         <PlayerView players={players} />

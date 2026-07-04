@@ -410,28 +410,62 @@ export default function ZoneCoordinatorDashboard({
               </div>
             </div>
 
+            {/* Same school stat cards the union dashboard uses — one look everywhere */}
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-              {filteredSchools.map((s) => (
-                <div key={s.id} className="relative group">
-                  <div onClick={() => setSelectedSchool(s)} className="cursor-pointer transition-transform hover:scale-105">
-                    <SchoolCard school={s} />
+              {filteredSchools.map((s) => {
+                const st = schoolStats.get(s.id) || { pCount: 0, cCount: 0, active: false }
+                const aCount = (admins || []).filter((a) => (a.role === 'SchoolAdmin' || a.data?.role === 'SchoolAdmin') && String(a.data?.schoolId || a.schoolId || '') === String(s.id)).length
+                return (
+                  <div key={s.id} className="relative group">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSchool(s)}
+                      className={`w-full text-left rounded-xl border p-6 shadow-sm transition-all hover:shadow-md ${st.active ? 'bg-white hover:border-emerald-200' : 'bg-gray-50 border-gray-200 opacity-80'}`}
+                    >
+                      <div className={`absolute top-2 right-2 px-2 py-0.5 text-[10px] font-bold uppercase rounded ${st.active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
+                        {st.active ? 'Registered' : 'Unregistered'}
+                      </div>
+                      <div className="flex items-center gap-4 mb-4">
+                        <div className={`h-12 w-12 rounded-full flex items-center justify-center transition-colors ${st.active ? 'bg-emerald-50 group-hover:bg-emerald-600' : 'bg-gray-200'}`}>
+                          <School className={`h-6 w-6 ${st.active ? 'text-emerald-600 group-hover:text-white' : 'text-gray-400'}`} />
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="font-bold text-gray-900 line-clamp-1">{s.data?.name || s.name}</h3>
+                          <div className="text-xs text-gray-500 truncate">ID: {s.schoolId || String(s.id).slice(0, 12)}</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center text-sm border-t pt-4">
+                        <div>
+                          <div className="font-bold text-gray-900">{aCount}</div>
+                          <div className="text-xs text-gray-500">Admins</div>
+                        </div>
+                        <div className="border-l">
+                          <div className="font-bold text-gray-900">{st.cCount}</div>
+                          <div className="text-xs text-gray-500">Coaches</div>
+                        </div>
+                        <div className="border-l">
+                          <div className="font-bold text-gray-900">{st.pCount}</div>
+                          <div className="text-xs text-gray-500">Players</div>
+                        </div>
+                      </div>
+                    </button>
+                    {!st.active && (
+                      <div className="absolute bottom-3 right-3">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setRegisteringSchool(s)
+                          }}
+                          className="flex items-center gap-1 px-3 py-1 bg-emerald-600 text-white text-xs font-bold rounded-full shadow-lg hover:bg-emerald-700 transition-colors"
+                        >
+                          <UserPlus className="h-3 w-3" />
+                          Register
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  {!schoolStats.get(s.id)?.active && (
-                    <div className="absolute top-2 right-2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setRegisteringSchool(s)
-                        }}
-                        className="flex items-center gap-1 px-3 py-1 bg-emerald-600 text-white text-xs font-bold rounded-full shadow-lg hover:bg-emerald-700 transition-colors"
-                      >
-                        <UserPlus className="h-3 w-3" />
-                        Register
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+                )
+              })}
               {filteredSchools.length === 0 && (
                 <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">
                   No schools found
@@ -520,31 +554,47 @@ export default function ZoneCoordinatorDashboard({
               </div>
             )}
 
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-              {filteredReferees.map((r) => (
-                <div key={r.id} className="relative group">
-                  <RefereeCard referee={r} badge={r.data?.schoolId ? 'Assigned' : 'Unassigned'} />
-                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 rounded-2xl transition-opacity">
-                    <button
-                      onClick={() => setViewingStaff({ person: r, role: 'Referee' })}
-                      className="bg-white text-gray-700 px-4 py-2 rounded-full font-bold shadow-lg hover:bg-gray-50"
-                    >
-                      View Profile
-                    </button>
-                    <button
-                      onClick={() => setAssigningReferee(r)}
-                      className="bg-white text-emerald-600 px-4 py-2 rounded-full font-bold shadow-lg hover:bg-emerald-50"
-                    >
-                      Assign to School
-                    </button>
-                  </div>
-                  {r.data?.schoolId && (
-                    <div className="mt-2 text-center text-sm text-gray-500">
-                      Assigned to: {schools.find(s => s.id === r.data.schoolId)?.data?.name || 'Unknown School'}
+            {/* Same amber "official" chips used on the school views — one look everywhere */}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {filteredReferees.map((r) => {
+                const assignedSchool = r.data?.schoolId ? (schools.find(s => s.id === r.data.schoolId)?.data?.name || 'Unknown School') : ''
+                return (
+                  <div key={r.id} className="relative group rounded-xl border bg-amber-50 border-amber-100 p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="h-11 w-11 shrink-0 rounded-full bg-amber-200 flex items-center justify-center text-amber-700 font-bold">
+                        {(r.data?.name?.[0] || r.name?.[0] || '')}{(r.data?.surname?.[0] || r.surname?.[0] || '')}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-gray-900 truncate">{r.data?.name || r.name} {r.data?.surname || r.surname}</div>
+                        <div className="text-xs text-gray-500 truncate">
+                          {r.qualifications || r.data?.refereeLevel || 'Referee'}
+                          {(r.experience || r.data?.yearsExperience) ? ` • ${r.experience || r.data?.yearsExperience} yrs` : ''}
+                        </div>
+                      </div>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${r.data?.schoolId ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-600'}`}>
+                        {r.data?.schoolId ? 'Assigned' : 'Unassigned'}
+                      </span>
                     </div>
-                  )}
-                </div>
-              ))}
+                    {assignedSchool && (
+                      <div className="mt-2 text-xs text-gray-500">Assigned to: {assignedSchool}</div>
+                    )}
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => setViewingStaff({ person: r, role: 'Referee' })}
+                        className="flex-1 rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                      >
+                        View Profile
+                      </button>
+                      <button
+                        onClick={() => setAssigningReferee(r)}
+                        className="flex-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                      >
+                        Assign to School
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
               {filteredReferees.length === 0 && (
                 <div className="col-span-full py-12 text-center text-gray-500 border border-dashed rounded-xl">
                   No referees found
