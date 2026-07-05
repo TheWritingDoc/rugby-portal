@@ -3,6 +3,7 @@
 // can pick "Save as PDF" or a physical printer.
 import QRCode from 'qrcode'
 import { API_ORIGIN } from './apiBase'
+import { postJsonPath } from './api'
 import { schoolNameOf, zoneNameOf } from './labels'
 import { seasonYearOf } from './season'
 
@@ -172,10 +173,23 @@ export async function printPlayerCards(players: any[], meta: PrintMeta = {}) {
 
   // Each QR encodes the player's identity so a match-day official can scan and
   // verify who the card belongs to (works offline — the data is self-contained).
+  // A signed verify URL is appended so the Rugby Assistant app can confirm the
+  // registration online; if token minting fails the card still prints without it.
+  const ids = list.map((p) => String(p?.id || p?.serverId || p?.data?.serverId || ''))
+  const verifyUrlById = new Map<string, string>()
+  try {
+    const items = ids.filter(Boolean).map((id) => ({ type: 'players', id }))
+    if (items.length) {
+      const res = await postJsonPath('verify-tokens', { items })
+      for (const t of res?.data?.tokens || []) {
+        if (t?.id && t?.url) verifyUrlById.set(String(t.id), String(t.url))
+      }
+    }
+  } catch {}
   const qrs = await Promise.all(
-    list.map((p) => {
+    list.map((p, i) => {
       const r = rowOf(p)
-      const refId = p?.id || p?.serverId || p?.data?.serverId || ''
+      const refId = ids[i]
       const payload = [
         'EPHSRU RUGBY — Player ID',
         `${r.name} ${r.surname}`.trim(),
@@ -184,6 +198,7 @@ export async function printPlayerCards(players: any[], meta: PrintMeta = {}) {
         r.school || '',
         `Season ${season}`,
         refId ? `Ref: ${refId}` : '',
+        verifyUrlById.get(refId) ? `Verify: ${verifyUrlById.get(refId)}` : '',
       ].filter(Boolean).join('\n')
       return QRCode.toDataURL(payload, { margin: 0, width: 160, errorCorrectionLevel: 'M' }).catch(() => '')
     })

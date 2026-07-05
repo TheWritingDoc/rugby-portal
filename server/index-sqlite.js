@@ -1,5 +1,6 @@
 import express from 'express'
 import cors from 'cors'
+import { createHmac, timingSafeEqual } from 'crypto'
 import { sign, verifyToken } from './auth.js'
 import multer from 'multer'
 import fs from 'fs'
@@ -1490,6 +1491,102 @@ app.put('/api/referees/:id', (req, res) => {
         res.json({ ...row, ...req.body, ts })
       }
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Match-day QR verification (consumed by the Rugby Assistant app)
+//
+// The QR on a printed ID card carries a signed token: `v1.<t>.<id>.<sig>`
+// where <t> is p/c/r (players/coaches/referees) and <sig> is an HMAC over
+// `<t>.<id>`. Anyone holding a valid card can look the person up; nobody can
+// enumerate the database, and the endpoint exposes no write path — the
+// Assistant app can look but never touch.
+// ---------------------------------------------------------------------------
+const QR_VERIFY_SECRET = process.env.QR_VERIFY_SECRET || process.env.JWT_SECRET || 'ephsru_dev_secret'
+const QR_TYPES = { p: 'players', c: 'coaches', r: 'referees' }
+
+function qrSig(t, id) {
+  return createHmac('sha256', QR_VERIFY_SECRET).update(`${t}.${id}`).digest('base64url').slice(0, 24)
+}
+
+function makeVerifyToken(entity, id) {
+  const t = Object.keys(QR_TYPES).find((k) => QR_TYPES[k] === entity)
+  if (!t || !id) return null
+  return `v1.${t}.${id}.${qrSig(t, id)}`
+}
+
+function verifyBaseUrl(req) {
+  if (APP_URL) return APP_URL
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http'
+  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost'
+  return `${proto}://${host}`
+}
+
+// Batch token minting for card printing — signed-in portal users only.
+app.post('/api/verify-tokens', (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'unauthorized' })
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 500) : []
+  const base = verifyBaseUrl(req)
+  const tokens = items.map((it) => {
+    const entity = String(it?.type || 'players')
+    const id = String(it?.id || '')
+    const token = makeVerifyToken(entity, id)
+    return token ? { type: entity, id, token, url: `${base}/api/verify/${token}` } : { type: entity, id, token: null, url: null }
+  })
+  res.json({ tokens })
+})
+
+// Public read-only lookup. CORS is deliberately open on this route (the
+// Assistant app lives on a different origin); the signed token is the gate.
+app.use('/api/verify/', rateLimit(isProd ? 120 : 1000, 60_000))
+app.get('/api/verify/:token', cors(), (req, res) => {
+  const parts = String(req.params.token || '').split('.')
+  const [ver, t, id, sig] = parts
+  const entity = QR_TYPES[t]
+  if (parts.length !== 4 || ver !== 'v1' || !entity || !id || !sig) {
+    return res.status(404).json({ registered: false, error: 'invalid_token' })
+  }
+  const expected = Buffer.from(qrSig(t, id))
+  const given = Buffer.from(String(sig))
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) {
+    return res.status(404).json({ registered: false, error: 'invalid_token' })
+  }
+  db.get(`SELECT * FROM ${entity} WHERE id = ?`, [id], (err, row) => {
+    if (err) return res.status(500).json({ error: 'lookup_failed' })
+    if (!row) return res.status(404).json({ registered: false, error: 'not_registered' })
+    let d = {}
+    try { d = JSON.parse(row.data || '{}') } catch {}
+    const role = entity === 'players' ? 'Player' : entity === 'coaches' ? 'Coach' : 'Referee'
+    const age = (() => {
+      const dob = String(row.dateOfBirth || d.dateOfBirth || '')
+      const born = dob ? new Date(dob) : null
+      if (!born || isNaN(born.getTime())) return null
+      const now = new Date()
+      let a = now.getFullYear() - born.getFullYear()
+      if (now.getMonth() < born.getMonth() || (now.getMonth() === born.getMonth() && now.getDate() < born.getDate())) a--
+      return a >= 0 && a < 120 ? a : null
+    })()
+    const result = {
+      registered: true,
+      role,
+      name: row.name || '',
+      surname: row.surname || '',
+      age,
+      ageGroup: row.ageGroup || d.ageGroup || null,
+      gender: row.gender || null,
+      position: d.position || null,
+      jerseyNumber: d.jerseyNumber || null,
+      photoUrl: d.photoUrl ? (String(d.photoUrl).startsWith('/') ? `${verifyBaseUrl(req)}${d.photoUrl}` : d.photoUrl) : null,
+      registrationYear: d.registrationYear || null,
+      schoolId: row.schoolId || null,
+      school: null,
+    }
+    if (!row.schoolId) return res.json(result)
+    db.get('SELECT data FROM schools WHERE schoolId = ?', [row.schoolId], (_serr, srow) => {
+      try { result.school = JSON.parse(srow?.data || '{}').name || null } catch {}
+      res.json(result)
+    })
   })
 })
 
