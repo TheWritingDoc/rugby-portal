@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { X, AlertCircle, CheckCircle, User, Shield, Activity, Heart, School, MapPin } from 'lucide-react'
-import { AGE_GROUPS, POSITIONS, RELATIONSHIPS } from '../../utils/constants'
+import { RELATIONSHIPS } from '../../utils/constants'
+import { ageGroupsForZone, positionsForZone } from '../../data/leagues'
 import { isEmail, isPhoneZA, isIdNumber } from '../../utils/validation'
 import { putJson } from '../../utils/api'
 import { ensureSession } from '../../utils/auth'
@@ -223,7 +224,7 @@ export default function PlayerProfileModal({ player, onClose, onUpdated, role = 
                         onChange={(e) => setValue(f.key, e.target.value)}
                         onBlur={() => saveField(f.key)}
                       >
-                        {AGE_GROUPS.map(g => <option key={g}>{g}</option>)}
+                        {ageGroupsForZone(vals.zoneId || player.zoneId).map(g => <option key={g}>{g}</option>)}
                       </select>
                     ) : f.key === 'position' ? (
                       <select
@@ -233,7 +234,7 @@ export default function PlayerProfileModal({ player, onClose, onUpdated, role = 
                         onBlur={() => saveField(f.key)}
                       >
                         <option value="">Select...</option>
-                        {POSITIONS.map(p => <option key={p}>{p}</option>)}
+                        {positionsForZone(vals.zoneId || player.zoneId).map(p => <option key={p}>{p}</option>)}
                       </select>
                     ) : f.key === 'relationship' ? (
                       <select

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { zones as fallbackZones, schools as fallbackSchools, School } from '../data/zones'
+import { LEAGUE_ZONES, EPRU_CLUBS, orgTermOf, levelOfZone } from '../data/leagues'
 import { getParsedData } from '../data/parseMd'
 
 type SelectProps = {
@@ -36,7 +37,9 @@ export function ZoneSelect({ value, onChange }: { value?: string; onChange: (v: 
   useEffect(() => {
     const { zones } = getParsedData()
     const list = zones.length ? zones : fallbackZones
-    setOpts(list.map((z) => ({ label: z.name, value: String(z.id) })))
+    // School rugby zones first, then the league expansion (club rugby, other sports)
+    const merged = [...list, ...LEAGUE_ZONES.filter((lz) => !list.some((z) => z.id === lz.id))]
+    setOpts(merged.map((z) => ({ label: z.name, value: String(z.id) })))
   }, [])
   return <Select label="Zone" value={value} onChange={onChange} options={opts} />
 }
@@ -46,14 +49,35 @@ export function SchoolSelect({ zoneId, value, onChange }: { zoneId?: string; val
   useEffect(() => {
     const { schools } = getParsedData()
     const list = schools.length ? schools : fallbackSchools
-    setAll(list as any)
+    setAll([...(list as any), ...EPRU_CLUBS.filter((c) => !list.some((s: any) => s.id === c.id))])
   }, [])
   const options = useMemo(() => {
     let list: School[] = all
     if (zoneId) list = list.filter((s) => String(s.zoneId) === zoneId)
     return list.map((s) => ({ label: s.name, value: s.id }))
   }, [zoneId, all])
-  return <Select label="School" value={value} onChange={onChange} options={options} />
+  // In club leagues the organisation is a club, not a school — but the field
+  // keeps the same test id ("school-select") so automation is unaffected.
+  const isClubZone = zoneId ? levelOfZone(zoneId) === 'club' : false
+  return (
+    <label className="block">
+      <span className="text-sm font-medium">{isClubZone ? orgTermOf(zoneId) : 'School'}</span>
+      <select
+        className="mt-1 w-full rounded-md border border-gray-300 bg-white p-2 text-sm focus:border-brand focus:outline-none"
+        name="School"
+        data-testid="school-select"
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">Select...</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
 }
 
 export function AutoFields({ schoolId }: { schoolId?: string }) {

@@ -18,6 +18,7 @@ import pg from 'pg'
 import fs from 'fs'
 import path from 'path'
 import { parseSchoolsFromMd, seedSchoolData } from './seed-schools.js'
+import { EPRU_CLUB_SEED, seedClubData } from './seed-organizations.js'
 
 // Return BIGINT (oid 20) as a Number instead of a string. Safe for ms epochs.
 pg.types.setTypeParser(20, (v) => (v === null ? null : Number(v)))
@@ -238,6 +239,24 @@ async function initSchema() {
     } catch (e) {
       console.error('[pg] school seed skipped:', e?.message || e)
     }
+  }
+
+  // League expansion: seed the EPRU club catalog. Runs on every boot but is
+  // idempotent — ON CONFLICT (schoolId) DO NOTHING against the unique index.
+  try {
+    const ts = Date.now()
+    let added = 0
+    for (const c of EPRU_CLUB_SEED) {
+      const r = await pool.query(
+        `INSERT INTO schools (id, zoneId, schoolId, address, contactNumber, email, data, ts)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (schoolId) DO NOTHING`,
+        [c.id, c.zoneId, c.schoolId, null, null, null, seedClubData(c), ts]
+      )
+      added += r.rowCount || 0
+    }
+    if (added > 0) console.log(`[pg] seeded ${added} EPRU clubs`)
+  } catch (e) {
+    console.error('[pg] club seed skipped:', e?.message || e)
   }
 }
 

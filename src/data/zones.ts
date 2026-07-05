@@ -1,14 +1,21 @@
+export type Sport = 'Rugby' | 'Soccer' | 'Netball' | 'Cricket'
+export type OrgLevel = 'school' | 'club'
+
 export type Zone = {
   id: number
   name: string
   pool?: 'Uitenhage' | 'Northern Areas'
+  /** Which sport this zone/league belongs to. Zones 0–12 are the original EPHSRU schools rugby zones. */
+  sport?: Sport
+  /** Whether organisations in this zone are schools or clubs. Defaults to 'school'. */
+  level?: OrgLevel
 }
 
 export type School = {
   id: string
   name: string
   zoneId: number
-  quintileCategory: 'Q1-3' | 'Q4-5 festival'
+  quintileCategory: 'Q1-3' | 'Q4-5 festival' | 'Club'
 }
 
 export const zones: Zone[] = [

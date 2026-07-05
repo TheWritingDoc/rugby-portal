@@ -2,6 +2,7 @@ import Database from 'sqlite3'
 import path from 'path'
 import fs from 'fs'
 import crypto from 'crypto'
+import { EPRU_CLUB_SEED, seedClubData } from './seed-organizations.js'
 
 const dbPath = path.join(process.cwd(), 'server', 'data', 'database.sqlite')
 
@@ -112,7 +113,18 @@ db.serialize(() => {
       stmt.finalize()
     }
   } catch {}
-  
+
+  // League expansion: seed the EPRU club catalog (idempotent via INSERT OR
+  // IGNORE against the unique schoolId index).
+  try {
+    const ts = Date.now()
+    const stmt = db.prepare('INSERT OR IGNORE INTO schools (id, zoneId, schoolId, address, contactNumber, email, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    for (const c of EPRU_CLUB_SEED) {
+      stmt.run([c.id, c.zoneId, c.schoolId, null, null, null, seedClubData(c), ts])
+    }
+    stmt.finalize()
+  } catch {}
+
   // Players table
   db.run(`
     CREATE TABLE IF NOT EXISTS players (

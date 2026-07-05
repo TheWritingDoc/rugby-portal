@@ -4,7 +4,8 @@ import { getEntities, updateEntity, getProposals, addProposal, setProposalStatus
 import { fetchList, safePost, safePut, postJson, putJson, fetchOne, postJsonPath, getJsonPath } from '../utils/api'
 import { emitPlayersLoaded, emitPlayersUpdated, emitListReady, emitRowAdded } from '../utils/events'
 import { normalizeRow } from '../utils/normalize'
-import { AGE_GROUPS, POSITIONS, RELATIONSHIPS } from '../utils/constants'
+import { RELATIONSHIPS } from '../utils/constants'
+import { ageGroupsForZone, positionsForZone, levelOfZone } from '../data/leagues'
 import { ensureSession, getToken } from '../utils/auth'
 import { API_ORIGIN, apiUrl } from '../utils/apiBase'
 import { LayoutGrid, List as ListIcon, Users, User, Heart, Shield, Activity, FileText, ChevronDown, MoreVertical, School, Mail, Phone, MapPin, Calendar, CreditCard, AlertCircle, X, UserCheck, Crown, Search } from 'lucide-react'
@@ -1793,16 +1794,16 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
                 <option>Female</option>
               </select>
             </label>
-            <label className="block"><span className="text-sm font-medium">Age Group</span>
+            <label className="block"><span className="text-sm font-medium">{levelOfZone(zoneId) === 'club' ? 'Division' : 'Age Group'}</span>
               <select className="mt-1 w-full rounded-md border p-2" value={form.ageGroup} onChange={(e) => setForm({ ...form, ageGroup: e.target.value })}>
                 <option value="">Select...</option>
-                {AGE_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
+                {ageGroupsForZone(zoneId).map((g) => <option key={g} value={g}>{g}</option>)}
               </select>
             </label>
             <label className="block"><span className="text-sm font-medium">Position</span>
               <select className="mt-1 w-full rounded-md border p-2" value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })}>
                 <option value="">Select...</option>
-                {POSITIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+                {positionsForZone(zoneId).map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </label>
             <label className="block sm:col-span-2"><span className="text-sm font-medium">Profile Photo</span>
@@ -2622,6 +2623,10 @@ function CoachPlayerDetail({ player, mode, onBack, onUpdated }: { player: any; m
 function CoachPlayerEditor({ player, onUpdated, onClose }: { player: any; onUpdated: () => void; onClose: () => void }) {
   const d = player.data || {}
   const [vals, setVals] = useState<any>({ ...d })
+  // Sport/level-aware option lists — a soccer club player gets soccer
+  // positions and club divisions, a rugby school player the original lists.
+  const AGE_OPTS = ageGroupsForZone(player.zoneId ?? d.zoneId)
+  const POS_OPTS = positionsForZone(player.zoneId ?? d.zoneId)
   const id = player.id || d.serverId || ''
   const fields: { key: string; label: string; type?: 'text' | 'date' | 'email' | 'number' }[] = [
     { key: 'name', label: 'Name' },
@@ -2770,13 +2775,13 @@ function CoachPlayerEditor({ player, onUpdated, onClose }: { player: any; onUpda
                   </select>
                 ) : f.key === 'ageGroup' ? (
                   <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
-                    {AGE_GROUPS.map((g) => (
+                    {AGE_OPTS.map((g) => (
                       <option key={g}>{g}</option>
                     ))}
                   </select>
                 ) : f.key === 'position' ? (
                   <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
-                    {POSITIONS.map((p) => (
+                    {POS_OPTS.map((p) => (
                       <option key={p}>{p}</option>
                     ))}
                   </select>
@@ -2816,13 +2821,13 @@ function CoachPlayerEditor({ player, onUpdated, onClose }: { player: any; onUpda
                   </select>
                 ) : f.key === 'ageGroup' ? (
                   <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
-                    {AGE_GROUPS.map((g) => (
+                    {AGE_OPTS.map((g) => (
                       <option key={g}>{g}</option>
                     ))}
                   </select>
                 ) : f.key === 'position' ? (
                   <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
-                    {POSITIONS.map((p) => (
+                    {POS_OPTS.map((p) => (
                       <option key={p}>{p}</option>
                     ))}
                   </select>
@@ -2863,14 +2868,14 @@ function CoachPlayerEditor({ player, onUpdated, onClose }: { player: any; onUpda
                     <span className="text-sm font-medium">{f.label}</span>
                     {f.key === 'position' ? (
                       <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
-                        {POSITIONS.map((p) => (
+                        {POS_OPTS.map((p) => (
                           <option key={p}>{p}</option>
                         ))}
                       </select>
                     ) : f.key === 'team' ? (
                       <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
                         <option value="">Select...</option>
-                        {AGE_GROUPS.map((t) => (
+                        {AGE_OPTS.map((t) => (
                           <option key={t}>{t}</option>
                         ))}
                       </select>
@@ -2905,13 +2910,13 @@ function CoachPlayerEditor({ player, onUpdated, onClose }: { player: any; onUpda
                   </select>
                 ) : f.key === 'ageGroup' ? (
                   <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
-                    {AGE_GROUPS.map((g) => (
+                    {AGE_OPTS.map((g) => (
                       <option key={g}>{g}</option>
                     ))}
                   </select>
                 ) : f.key === 'position' ? (
                   <select className="mt-1 w-full rounded-md border p-2" value={vals[f.key] ?? ''} onChange={(e) => setValue(f.key, e.target.value)}>
-                    {POSITIONS.map((p) => (
+                    {POS_OPTS.map((p) => (
                       <option key={p}>{p}</option>
                     ))}
                   </select>
