@@ -15,6 +15,7 @@ import { CoachAvatar } from '../CoachCard'
 import PlayerProfileModal from '../modals/PlayerProfileModal'
 import StaffProfileModal from '../modals/StaffProfileModal'
 import SchoolPeopleBrowser from '../SchoolPeopleBrowser'
+import PlatformPanel from './PlatformPanel'
 import { schoolNameOf, zoneNameOf } from '../../utils/labels'
 
 interface EPHSRUAdminDashboardProps {
@@ -50,7 +51,7 @@ const ACCENT: Record<string, { soft: string; softHover: string; tint: string; so
 export default function EPHSRUAdminDashboard({ 
   zones, schools, players, coaches, referees, admins, onRefresh 
 }: EPHSRUAdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'zones' | 'schools' | 'users' | 'approvals' | 'analytics'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'zones' | 'schools' | 'users' | 'approvals' | 'analytics' | 'platform'>('overview')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedZone, setSelectedZone] = useState('')
   const [selectedZoneDetail, setSelectedZoneDetail] = useState<any>(null)
@@ -331,7 +332,8 @@ export default function EPHSRUAdminDashboard({
             { id: 'schools', label: 'Schools', icon: School },
             { id: 'users', label: 'Users', icon: Users },
             { id: 'approvals', label: 'Approvals', icon: CheckSquare, badge: pendingApprovals.length },
-            { id: 'analytics', label: 'Analytics', icon: BarChart3 }
+            { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+            { id: 'platform', label: 'Platform', icon: Crown }
           ].map((tab) => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id as any)}
               className={`flex items-center gap-2 py-4 px-4 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
@@ -1004,6 +1006,8 @@ export default function EPHSRUAdminDashboard({
             </div>
           </div>
         )}
+
+        {activeTab === 'platform' && <PlatformPanel />}
 
         {activeTab === 'analytics' && (
           <div className="space-y-6">

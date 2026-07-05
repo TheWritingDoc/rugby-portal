@@ -2323,6 +2323,90 @@ app.post('/api/documents', (req, res) => {
   )
 })
 
+// ===========================================================================
+// PrecisionCode owner panel — platform-wide aggregates for the product owner.
+// One shared database; every number here is a single GROUP BY away. Gated to
+// the union admin role (the owner account).
+// ===========================================================================
+function dbAllPf(sql, params) {
+  return new Promise((resolve, reject) => db.all(sql, params, (e, r) => (e ? reject(e) : resolve(r || []))))
+}
+
+app.get('/api/platform/overview', async (req, res) => {
+  if (req.user?.role !== 'EPHSRUAdmin') return res.status(403).json({ error: 'forbidden' })
+  try {
+    const seasonStart = new Date(`${new Date().getFullYear()}-01-01T00:00:00Z`).getTime()
+    const since14 = Date.now() - 14 * 86_400_000
+
+    // Portable SQL only — this endpoint must run identically on SQLite (dev)
+    // and Postgres (prod), so no json_extract/strftime; day grouping is in JS.
+    const [schoolsByZone, playersByZone, pendingPlayers, seasonPlayers, coachesByZone, referees, adminsByRole, auditTs, actionRows, latestAudit] = await Promise.all([
+      dbAllPf('SELECT zoneId, COUNT(1) n FROM schools GROUP BY zoneId', []),
+      dbAllPf('SELECT zoneId, COUNT(1) n FROM players GROUP BY zoneId', []),
+      dbAllPf(`SELECT COUNT(1) n FROM players WHERE data LIKE '%"status":"pending"%'`, []),
+      dbAllPf('SELECT COUNT(1) n FROM players WHERE ts >= ?', [seasonStart]),
+      dbAllPf('SELECT zoneId, COUNT(1) n FROM coaches GROUP BY zoneId', []),
+      dbAllPf('SELECT COUNT(1) n FROM referees', []),
+      dbAllPf('SELECT role, COUNT(1) n FROM admins GROUP BY role', []),
+      dbAllPf('SELECT ts FROM audits WHERE ts >= ?', [since14]),
+      dbAllPf('SELECT action, COUNT(1) n FROM audits WHERE ts >= ? GROUP BY action ORDER BY n DESC LIMIT 6', [since14]),
+      dbAllPf('SELECT MAX(ts) t FROM audits', []),
+    ])
+
+    // Group audit events into calendar days (local server time)
+    const dayCounts = new Map()
+    for (const r of auditTs) {
+      const d = new Date(Number(r.ts) || 0)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      dayCounts.set(key, (dayCounts.get(key) || 0) + 1)
+    }
+    const activityRows = [...dayCounts.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([day, n]) => ({ day, n }))
+
+    const sum = (rows) => rows.reduce((a, r) => a + Number(r.n || 0), 0)
+    const byRole = Object.fromEntries(adminsByRole.map((r) => [String(r.role || ''), Number(r.n || 0)]))
+
+    // Per-zone breakdown for the drill table (zone names resolve client-side)
+    const zoneIds = [...new Set([...schoolsByZone, ...playersByZone, ...coachesByZone].map((r) => String(r.zoneId || '')))]
+      .filter((z) => z !== '')
+    const pick = (rows, z) => Number((rows.find((r) => String(r.zoneId || '') === z) || {}).n || 0)
+    const zonesOut = zoneIds.map((z) => ({
+      zoneId: z,
+      schools: pick(schoolsByZone, z),
+      players: pick(playersByZone, z),
+      coaches: pick(coachesByZone, z),
+    })).sort((a, b) => b.players - a.players)
+
+    res.json({
+      company: 'PrecisionCode PTY LTD',
+      generatedAt: Date.now(),
+      products: [
+        {
+          id: 'ephsru-schools-rugby',
+          name: 'EPHSRU Schools Rugby Portal',
+          sport: 'Rugby',
+          level: 'school',
+          status: 'live',
+          orgs: sum(schoolsByZone),
+          players: sum(playersByZone),
+          coaches: sum(coachesByZone),
+          referees: sum(referees),
+          zoneCoordinators: byRole.ZoneCoordinator || 0,
+          schoolAdmins: byRole.SchoolAdmin || 0,
+          unionAdmins: byRole.EPHSRUAdmin || 0,
+          registrationsThisSeason: sum(seasonPlayers),
+          pendingPlayers: sum(pendingPlayers),
+          lastActivityAt: Number((latestAudit[0] || {}).t || 0),
+        },
+      ],
+      zones: zonesOut,
+      activity: activityRows.map((r) => ({ day: String(r.day), events: Number(r.n || 0) })),
+      topActions: actionRows.map((r) => ({ action: String(r.action || ''), n: Number(r.n || 0) })),
+    })
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
+
 // Resolve which school/zone/person a document belongs to so access can be scoped.
 // Legacy rows with unresolvable owners stay visible to EPHSRU admins only.
 function resolveDocOwner(ownerType, ownerId, cb) {
