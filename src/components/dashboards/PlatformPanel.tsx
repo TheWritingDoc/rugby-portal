@@ -37,12 +37,14 @@ type Overview = {
 
 // Sports the company plans to launch next — shown as roadmap cards so the
 // owner panel doubles as the pitch view. Purely presentational: no data
-// exists for these until a federation signs on.
+// exists for these until a federation signs on. The demo figures are
+// realistic Eastern Cape scale, used only in the showcase toggle and always
+// badged DEMO so they can never be mistaken for live numbers.
 const ROADMAP = [
-  { name: 'EPRU Club Rugby', sport: 'Rugby', level: 'club' },
-  { name: 'EP Soccer (School & Club)', sport: 'Soccer', level: 'school + club' },
-  { name: 'EP Netball (School & Club)', sport: 'Netball', level: 'school + club' },
-  { name: 'EP Cricket (School & Club)', sport: 'Cricket', level: 'school + club' },
+  { name: 'EPRU Club Rugby', sport: 'Rugby', level: 'club', demo: { orgs: 90, players: 2840, coaches: 178, referees: 42, admins: 94, season: 2610 } },
+  { name: 'EP Soccer (School & Club)', sport: 'Soccer', level: 'school + club', demo: { orgs: 124, players: 3960, coaches: 214, referees: 58, admins: 129, season: 3705 } },
+  { name: 'EP Netball (School & Club)', sport: 'Netball', level: 'school + club', demo: { orgs: 96, players: 2310, coaches: 141, referees: 33, admins: 101, season: 2188 } },
+  { name: 'EP Cricket (School & Club)', sport: 'Cricket', level: 'school + club', demo: { orgs: 64, players: 1480, coaches: 92, referees: 21, admins: 66, season: 1352 } },
 ]
 
 function timeAgo(ts: number) {
@@ -63,6 +65,9 @@ export default function PlatformPanel() {
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState('')
   const [visibleZones, setVisibleZones] = useState(13)
+  // Showcase mode: renders the roadmap sports as full product cards with
+  // sample figures (badged DEMO) — for pitching the platform to federations.
+  const [demoMode, setDemoMode] = useState(false)
 
   useEffect(() => {
     ;(async () => {
@@ -114,7 +119,25 @@ export default function PlatformPanel() {
 
       {/* Live product */}
       <section>
-        <h3 className="mb-3 text-sm font-semibold text-gray-900">Products</h3>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-900">Products</h3>
+          <button
+            type="button"
+            aria-pressed={demoMode}
+            onClick={() => setDemoMode((v) => !v)}
+            data-testid="demo-toggle"
+            className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${demoMode ? 'bg-amber-100 text-amber-700 ring-1 ring-amber-300' : 'bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-50'}`}
+            title="Preview the expansion sports as product cards with sample figures"
+          >
+            <span className={`h-2 w-2 rounded-full ${demoMode ? 'bg-amber-500' : 'bg-gray-300'}`} />
+            {demoMode ? 'Demo showcase on' : 'Demo showcase'}
+          </button>
+        </div>
+        {demoMode && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+            Showcase mode — the cards below marked <strong>DEMO</strong> use sample figures to illustrate the platform running multiple sports. Only the LIVE card shows real data.
+          </div>
+        )}
         <div className="overflow-hidden rounded-xl border border-emerald-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-100 bg-emerald-50/60 px-5 py-4">
             <div className="flex items-center gap-3">
@@ -152,6 +175,46 @@ export default function PlatformPanel() {
             ))}
           </div>
         </div>
+
+        {/* Demo showcase: expansion sports rendered as product cards with sample figures */}
+        {demoMode && (
+          <div className="mt-3 space-y-3" data-testid="demo-products">
+            {ROADMAP.map((r) => (
+              <div key={r.name} className="overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-100 bg-amber-50/60 px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+                      <Trophy className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="font-semibold text-gray-900">{r.name}</div>
+                      <div className="text-xs text-gray-500">{r.sport} · {r.level} level · Eastern Cape</div>
+                    </div>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 ring-1 ring-amber-300">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> DEMO — sample figures
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 divide-x divide-y divide-gray-100 sm:grid-cols-3 lg:grid-cols-6">
+                  {[
+                    { icon: School, label: r.level === 'club' ? 'Clubs' : 'Organisations', value: r.demo.orgs },
+                    { icon: Users, label: 'Players', value: r.demo.players },
+                    { icon: UserCheck, label: 'Coaches', value: r.demo.coaches },
+                    { icon: Award, label: 'Referees', value: r.demo.referees },
+                    { icon: Shield, label: 'Admins', value: r.demo.admins },
+                    { icon: CalendarCheck, label: 'Season registrations', value: r.demo.season },
+                  ].map((s) => (
+                    <div key={s.label} className="px-4 py-4">
+                      <s.icon className="mb-1.5 h-4 w-4 text-amber-400" aria-hidden="true" />
+                      <div className="text-xl font-bold text-gray-900">{s.value.toLocaleString()}</div>
+                      <div className="text-xs text-gray-500">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Season pulse + activity */}
@@ -236,7 +299,8 @@ export default function PlatformPanel() {
         </div>
       </section>
 
-      {/* Roadmap */}
+      {/* Roadmap (hidden while the showcase renders these as demo cards) */}
+      {!demoMode && (
       <section>
         <h3 className="mb-3 text-sm font-semibold text-gray-900">Expansion roadmap</h3>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -257,6 +321,7 @@ export default function PlatformPanel() {
           The same portal runs any sport at school or club level — new leagues launch on this shared platform when a federation signs on.
         </p>
       </section>
+      )}
     </div>
   )
 }
