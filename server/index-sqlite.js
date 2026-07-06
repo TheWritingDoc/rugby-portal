@@ -2332,8 +2332,16 @@ function dbAllPf(sql, params) {
   return new Promise((resolve, reject) => db.all(sql, params, (e, r) => (e ? reject(e) : resolve(r || []))))
 }
 
+// The business dashboard belongs to the product owner (PrecisionCode), not to
+// every union admin. Override/extend via PLATFORM_OWNERS="a@x.com,b@y.com".
+const PLATFORM_OWNERS = String(process.env.PLATFORM_OWNERS || 'precisioncode.sa@gmail.com')
+  .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean)
+
 app.get('/api/platform/overview', async (req, res) => {
-  if (req.user?.role !== 'EPHSRUAdmin') return res.status(403).json({ error: 'forbidden' })
+  const email = String(req.user?.email || '').trim().toLowerCase()
+  if (req.user?.role !== 'EPHSRUAdmin' || !PLATFORM_OWNERS.includes(email)) {
+    return res.status(403).json({ error: 'owner_only' })
+  }
   try {
     const seasonStart = new Date(`${new Date().getFullYear()}-01-01T00:00:00Z`).getTime()
     const since14 = Date.now() - 14 * 86_400_000

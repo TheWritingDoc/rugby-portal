@@ -16,6 +16,7 @@ import PlayerProfileModal from '../modals/PlayerProfileModal'
 import StaffProfileModal from '../modals/StaffProfileModal'
 import SchoolPeopleBrowser from '../SchoolPeopleBrowser'
 import PlatformPanel from './PlatformPanel'
+import { isPlatformOwner } from '../../utils/owner'
 import { schoolNameOf, zoneNameOf } from '../../utils/labels'
 
 interface EPHSRUAdminDashboardProps {
@@ -333,7 +334,8 @@ export default function EPHSRUAdminDashboard({
             { id: 'users', label: 'Users', icon: Users },
             { id: 'approvals', label: 'Approvals', icon: CheckSquare, badge: pendingApprovals.length },
             { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-            { id: 'platform', label: 'Platform', icon: Crown }
+            // The business dashboard is the product owner's view, not a union feature
+            ...(isPlatformOwner() ? [{ id: 'platform', label: 'Business', icon: Crown }] : [])
           ].map((tab) => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id as any)}
               className={`flex items-center gap-2 py-4 px-4 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
