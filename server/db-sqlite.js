@@ -228,6 +228,22 @@ db.serialize(() => {
     )
   `)
   
+  // An email identifies exactly one account per table (logins resolve by
+  // email). Dedupe legacy rows first (keep the newest), then enforce with a
+  // partial unique index — rows without an email are unaffected.
+  for (const t of ['admins', 'coaches', 'referees', 'players']) {
+    db.run(
+      `DELETE FROM ${t} WHERE email IS NOT NULL AND email <> ''
+         AND rowid NOT IN (SELECT MAX(rowid) FROM ${t} WHERE email IS NOT NULL AND email <> '' GROUP BY lower(email))`,
+      () => {
+        db.run(
+          `CREATE UNIQUE INDEX IF NOT EXISTS ux_${t}_email ON ${t}(lower(email)) WHERE email IS NOT NULL AND email <> ''`,
+          (err) => { if (err) console.error(`[db] unique email index on ${t} skipped:`, err.message) }
+        )
+      }
+    )
+  }
+
   // Audits table
   db.run(`
     CREATE TABLE IF NOT EXISTS audits (

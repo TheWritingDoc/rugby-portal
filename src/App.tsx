@@ -13,12 +13,13 @@ import Login from './pages/Login'
 import Approvals from './pages/Approvals'
 import Reports from './pages/Reports'
 import AuditLogs from './pages/AuditLogs'
+import PrivacyPolicy from './pages/PrivacyPolicy'
 import { trackUserAction, trackPerformance, metrics } from './utils/metrics'
 import Toaster from './components/Toaster'
 import { notifyWarning } from './utils/notify'
 
 type FormKey = 'school' | 'player' | 'coach' | 'referee' | 'admin'
-type ScreenKey = FormKey | 'home' | 'dashboard' | 'login' | 'approvals' | 'reports' | 'create-user'
+type ScreenKey = FormKey | 'home' | 'dashboard' | 'login' | 'approvals' | 'reports' | 'create-user' | 'privacy'
 
 const ROLE_LABELS: Record<string, string> = {
   Player: 'Player',
@@ -229,13 +230,23 @@ export default function App() {
             <Selection onChoose={(k) => navigate(k as ScreenKey)} role={role} restrictByRole={true} />
           </Screen>
         )}
+        {screen === 'privacy' && (
+          <Screen title="Privacy Policy & Terms">
+            <PrivacyPolicy />
+          </Screen>
+        )}
         <RoleGate role={role} allow={['EPHSRUAdmin']}>
           <div className="mt-6">
             <AuditLogs />
           </div>
         </RoleGate>
       </main>
-      <footer className="bg-white p-4 text-center text-xs text-gray-500">© 2025 EPHSRU</footer>
+      <footer className="bg-white p-4 text-center text-xs text-gray-500">
+        © 2025 EPHSRU · Operated by PrecisionCode PTY LTD ·{' '}
+        <button type="button" className="underline hover:text-gray-700" onClick={() => navigate('privacy')}>
+          Privacy Policy &amp; Terms
+        </button>
+      </footer>
       <Toaster />
     </div>
   )
@@ -267,6 +278,8 @@ function canAccess(screen: string, role: 'Player' | 'Referee' | 'Coach' | 'Schoo
     home: ['Player','Referee','Coach','SchoolAdmin','ZoneCoordinator','EPHSRUAdmin'],
     'create-user': ['EPHSRUAdmin', 'ZoneCoordinator', 'SchoolAdmin', 'Coach'],
   }
+  // Public legal pages are readable by anyone, signed in or not
+  if (screen === 'privacy') return true
   const allowed = map[screen] || []
   return allowed.includes(role)
 }

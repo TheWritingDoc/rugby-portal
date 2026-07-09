@@ -92,6 +92,11 @@ CREATE INDEX IF NOT EXISTS idx_migrations_player ON migrations(playerId, migrati
 CREATE INDEX IF NOT EXISTS idx_players_idnumber ON players(idNumber);
 CREATE INDEX IF NOT EXISTS idx_players_email ON players(email);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_schools_schoolid ON schools(schoolId);
+-- An email identifies exactly one account per table (rows without email exempt)
+CREATE UNIQUE INDEX IF NOT EXISTS ux_admins_email   ON admins(lower(email))   WHERE email IS NOT NULL AND email <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_coaches_email  ON coaches(lower(email))  WHERE email IS NOT NULL AND email <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_referees_email ON referees(lower(email)) WHERE email IS NOT NULL AND email <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_players_email  ON players(lower(email))  WHERE email IS NOT NULL AND email <> '';
 
 -- ---------------------------------------------------------------------------
 -- Seed: school catalog (${schools.length} schools). Safe to re-run.

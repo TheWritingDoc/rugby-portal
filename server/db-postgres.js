@@ -218,6 +218,20 @@ async function initSchema() {
     WHERE a.ctid < b.ctid AND a.schoolId = b.schoolId`)
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS ux_schools_schoolid ON schools(schoolId)`)
 
+  // An email identifies exactly one account per table (logins resolve by
+  // email). Dedupe legacy rows (keep the newest ctid), then enforce with a
+  // partial unique index — rows without an email are unaffected.
+  for (const t of ['admins', 'coaches', 'referees', 'players']) {
+    try {
+      await pool.query(`DELETE FROM ${t} a USING ${t} b
+        WHERE a.ctid < b.ctid AND lower(a.email) = lower(b.email)
+          AND a.email IS NOT NULL AND a.email <> '' AND b.email IS NOT NULL AND b.email <> ''`)
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS ux_${t}_email ON ${t}(lower(email)) WHERE email IS NOT NULL AND email <> ''`)
+    } catch (e) {
+      console.error(`[pg] unique email index on ${t} skipped:`, e?.message || e)
+    }
+  }
+
   // Seed the school catalog once (only if empty), mirroring db-sqlite.js.
   const { rows } = await pool.query('SELECT COUNT(1)::int AS c FROM schools')
   if (!rows[0] || rows[0].c === 0) {

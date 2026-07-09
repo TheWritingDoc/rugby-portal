@@ -206,6 +206,18 @@ function applyPlayerApprovedChanges(playerRow, changesList, done) {
   )
 }
 
+// Emails are unique per table (partial unique index). Answer a duplicate with
+// a clear conflict instead of a raw SQL error. Works for both engines: SQLite
+// says "UNIQUE constraint failed: players.email", Postgres "duplicate key
+// value violates unique constraint \"ux_players_email\"".
+function insertError(res, err) {
+  const m = String(err?.message || '')
+  if (/unique/i.test(m) && /email/i.test(m)) {
+    return res.status(409).json({ error: 'email_already_registered' })
+  }
+  return res.status(500).json({ error: m })
+}
+
 function allowPost(type, role) {
   const env = process.env.NODE_ENV || 'development'
   if (!role) {
@@ -766,7 +778,7 @@ app.post('/api/players/register', (req, res) => {
        body.idNumber || null, body.dateOfBirth || null, body.gender || null, body.ageGroup || null,
        body.contactNumber || null, body.email || null, body.parentContact || null, body.parentEmail || null, data, ts],
       function(err3) {
-        if (err3) return res.status(500).json({ error: err3.message })
+        if (err3) return insertError(res, err3)
         writeAudit(req.user?.role, 'players', 'register', null, { id, ...body })
         res.json({ id, ts })
       }
@@ -813,7 +825,7 @@ app.post('/api/players', (req, res) => {
        body.idNumber || null, body.dateOfBirth || null, body.gender || null, body.ageGroup || null,
        body.contactNumber || null, body.email || null, body.parentContact || null, body.parentEmail || null, data, ts],
       function(err) {
-        if (err) return res.status(500).json({ error: err.message })
+        if (err) return insertError(res, err)
         writeAudit(req.user?.role, 'players', 'create', null, { id, ...body })
         welcomeNotification(body.email, 'a Player')
         res.json({ id, ts })
@@ -1348,7 +1360,7 @@ app.post('/api/coaches', (req, res) => {
      req.body.idNumber || null, req.body.contactNumber || null, req.body.email || null, 
      req.body.qualifications || null, req.body.experience || null, data, ts],
     function(err) {
-      if (err) return res.status(500).json({ error: err.message })
+      if (err) return insertError(res, err)
       writeAudit(req.user?.role, 'coaches', 'create', null, { id, ...req.body })
       welcomeNotification(req.body.email, 'a Coach')
       res.json({ id, ts })
@@ -1447,7 +1459,7 @@ app.post('/api/referees', (req, res) => {
     [id, req.body.name || '', req.body.surname || '', req.body.idNumber || null, req.body.contactNumber || null,
      req.body.email || null, req.body.qualifications || null, req.body.experience || null, data, ts, req.body.zoneId || null],
     function(err) {
-      if (err) return res.status(500).json({ error: err.message })
+      if (err) return insertError(res, err)
       writeAudit(req.user?.role, 'referees', 'create', null, { id, ...req.body })
       welcomeNotification(req.body.email, 'a Referee')
       res.json({ id, ts })
@@ -1604,7 +1616,7 @@ app.post('/api/admins', (req, res) => {
     [id, req.body.name || '', req.body.surname || '', req.body.idNumber || null, req.body.contactNumber || null,
      req.body.email || null, req.body.role || null, req.body.zoneId || null, req.body.schoolId || null, data, ts],
     function(err) {
-      if (err) return res.status(500).json({ error: err.message })
+      if (err) return insertError(res, err)
       welcomeNotification(req.body.email, req.body.role === 'ZoneCoordinator' ? 'a Zone Coordinator' : req.body.role === 'EPHSRUAdmin' ? 'an EPHSRU Admin' : 'a School Admin')
       res.json({ id, ts })
     }
