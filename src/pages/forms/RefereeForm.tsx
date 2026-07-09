@@ -7,6 +7,7 @@ import { addEntity } from '../../utils/db'
 import { safePost } from '../../utils/api'
 import { loadDraft, saveDraft, clearDraft } from '../../utils/storage'
 import { login, getToken } from '../../utils/auth'
+import { creatorScope } from '../../utils/creatorScope'
 import PhotoField from '../../components/PhotoField'
 import bcrypt from 'bcryptjs'
 
@@ -36,6 +37,9 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
     const regPassword = localStorage.getItem('reg:password') || ''
     if (regEmail) setEmail(regEmail)
     if (regPassword) setPassword(regPassword)
+    // Delegated creation: default the zone to the creator's own scope
+    const scope = creatorScope()
+    if (scope.zoneId) setZone((z) => z || scope.zoneId)
   }, [])
   useEffect(() => {
     saveDraft('referee', { zone, name, surname, idNumber, dob, phone, email, refereeLevel, yearsExperience, availability })
@@ -44,6 +48,7 @@ export default function RefereeForm({ role }: { role?: 'Player' | 'Referee' | 'C
   async function submit(e: React.FormEvent) {
     e.preventDefault()
 
+    if (!zone) return notifyError("Select the referee's zone")
     if (email && !isEmail(email)) return notifyError('Invalid email')
     if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
     if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID number')

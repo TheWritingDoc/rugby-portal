@@ -9,6 +9,7 @@ import { login } from '../../utils/auth'
 import { safePost, postJsonPath } from '../../utils/api'
 import { API_ORIGIN, apiUrl } from '../../utils/apiBase'
 import { loadDraft, saveDraft, clearDraft } from '../../utils/storage'
+import { creatorScope } from '../../utils/creatorScope'
 import { resizeImage } from '../../utils/image'
 import bcrypt from 'bcryptjs'
 
@@ -81,6 +82,10 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
     if (regEmail) setEmail(regEmail)
     if (regPassword) setPassword(regPassword)
     if (regEmail || regPassword) setPreRegDone(true)
+    // Delegated creation: default zone/school to the creator's own scope
+    const scope = creatorScope()
+    if (scope.zoneId) setZone((z) => z || scope.zoneId)
+    if (scope.schoolId) setSchool((s) => s || scope.schoolId)
   }, [])
   useEffect(() => {
     saveDraft('player', { zone, school, dob, gender, name, surname, idNumber, phone, email, address, emergencyContactName, emergencyContactNumber, parentName, parentSurname, relationship, parentContact, parentEmail, consentSignature, position, jerseyNumber, previousSchool, medicalAidName, medicalAidNumber, allergies, chronicConditions, medicalNotes })
@@ -102,6 +107,7 @@ export default function PlayerForm({ role, onGoLogin, onGoDashboard }: { role?: 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     if (role && !['Player','Coach','SchoolAdmin','EPHSRUAdmin'].includes(role)) return notifyError('Not authorized')
+    if (!zone || !school) return notifyError('Select the zone and school this player belongs to')
     if (email && !isEmail(email)) return notifyError('Invalid email')
     if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
     if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID/Passport number — a South African ID must be 13 digits with a valid check digit.')

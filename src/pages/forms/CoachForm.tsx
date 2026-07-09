@@ -11,6 +11,7 @@ import { saveDocumentLocal } from '../../utils/approvals'
 import { login } from '../../utils/auth'
 import { API_ORIGIN, apiUrl } from '../../utils/apiBase'
 import { resizeImage } from '../../utils/image'
+import { creatorScope } from '../../utils/creatorScope'
 import bcrypt from 'bcryptjs'
 
 const QUALIFICATION_LEVELS = ['None', 'Level 1', 'Level 2', 'Level 3']
@@ -54,6 +55,10 @@ export default function CoachForm({ role, onGoLogin, onGoDashboard }: { role?: '
     if (regEmail) setEmail(regEmail)
     if (regPassword) setPassword(regPassword)
     if (regEmail || regPassword) setPreRegDone(true)
+    // Delegated creation: default zone/school to the creator's own scope
+    const scope = creatorScope()
+    if (scope.zoneId) setZone((z) => z || scope.zoneId)
+    if (scope.schoolId) setSchool((s) => s || scope.schoolId)
   }, [])
   useEffect(() => {
     saveDraft('coach', { zone, school, name, surname, idNumber, dob, phone, email, qualificationLevel, yearsExperience, coachingAgeGroups, coachPosition, references, photoUrl })
@@ -68,6 +73,7 @@ export default function CoachForm({ role, onGoLogin, onGoDashboard }: { role?: '
   async function submit(e: React.FormEvent) {
     e.preventDefault()
 
+    if (!zone || !school) return notifyError('Select the zone and school this coach belongs to')
     if (email && !isEmail(email)) return notifyError('Invalid email')
     if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
     if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID number')

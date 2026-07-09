@@ -7,6 +7,7 @@ import { addEntity } from '../../utils/db'
 import { safePost } from '../../utils/api'
 import { loadDraft, saveDraft, clearDraft } from '../../utils/storage'
 import { login, getToken } from '../../utils/auth'
+import { creatorScope } from '../../utils/creatorScope'
 import PhotoField from '../../components/PhotoField'
 import bcrypt from 'bcryptjs'
 
@@ -37,6 +38,11 @@ export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coa
     const regPassword = localStorage.getItem('reg:password') || ''
     if (regEmail) setEmail(regEmail)
     if (regPassword) setPassword(regPassword)
+    // Delegated creation: default zone/school to the creator's own scope (a
+    // zone coordinator creating a school admin starts in their own zone)
+    const scope = creatorScope()
+    if (scope.zoneId) setZone((z) => z || scope.zoneId)
+    if (scope.schoolId) setSchool((s) => s || scope.schoolId)
   }, [])
   useEffect(() => {
     const pref = localStorage.getItem('reg:adminRole') as any
@@ -48,6 +54,8 @@ export default function AdminForm({ role }: { role?: 'Player' | 'Referee' | 'Coa
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     
+    if (!zone && roleSel !== 'EPHSRUAdmin') return notifyError('Select the zone for this account')
+    if (!school && roleSel === 'SchoolAdmin') return notifyError('Select the school this admin will manage')
     if (email && !isEmail(email)) return notifyError('Invalid email')
     if (phone && !isPhoneZA(phone)) return notifyError('Invalid phone number (+27 or 0XXXXXXXXX)')
     if (idNumber && !isIdNumber(idNumber)) return notifyError('Invalid ID number')
