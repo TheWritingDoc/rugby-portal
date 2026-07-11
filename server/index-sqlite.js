@@ -105,13 +105,71 @@ function queueNotification(email, subject, message, opts = {}) {
 // Sent when a superior creates an account down the hierarchy — the new user
 // learns their account exists and how to get in (password comes from their
 // administrator; "Forgot password?" lets them set their own).
+// ---------------------------------------------------------------------------
+// Email verification. Tokens are stateless HMAC signatures over the email
+// address (no table, no expiry — proving ownership of an inbox is harmless at
+// any time), so both data layers work unchanged. Verification never blocks
+// sign-in; it just flips data.emailVerified on every record with that email.
+// ---------------------------------------------------------------------------
+const EMAIL_VERIFY_SECRET = process.env.JWT_SECRET || 'ephsru_dev_secret'
+
+function emailVerifyToken(email) {
+  const e = String(email || '').trim().toLowerCase()
+  const sig = createHmac('sha256', EMAIL_VERIFY_SECRET).update(`verify-email:${e}`).digest('base64url')
+  return `${Buffer.from(e).toString('base64url')}.${sig}`
+}
+
+function parseEmailVerifyToken(token) {
+  const [payload, sig] = String(token || '').split('.')
+  if (!payload || !sig) return ''
+  let e = ''
+  try { e = Buffer.from(payload, 'base64url').toString('utf8').trim().toLowerCase() } catch { return '' }
+  const expect = createHmac('sha256', EMAIL_VERIFY_SECRET).update(`verify-email:${e}`).digest('base64url')
+  const a = Buffer.from(String(sig)); const b = Buffer.from(expect)
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return ''
+  return e
+}
+
+function emailVerifyLink(email) {
+  return `${APP_URL || 'http://localhost:5173'}/?verifyEmail=${encodeURIComponent(emailVerifyToken(email))}`
+}
+
+// Flip emailVerified on every record carrying this email (a person can be a
+// player in one table and an admin in another — one inbox, one verification).
+function markEmailVerified(email, cb) {
+  const e = String(email || '').trim().toLowerCase()
+  if (!e) return cb(null, 0)
+  const tables = ['players', 'coaches', 'referees', 'admins']
+  let done = 0
+  let updated = 0
+  for (const t of tables) {
+    db.all(`SELECT id, data FROM ${t} WHERE lower(email) = ?`, [e], (err, rows) => {
+      const list = err ? [] : rows || []
+      let pending = list.length
+      const finishTable = () => { done++; if (done === tables.length) cb(null, updated) }
+      if (pending === 0) return finishTable()
+      for (const row of list) {
+        let d = {}
+        try { d = JSON.parse(row.data || '{}') } catch {}
+        d.emailVerified = true
+        d.emailVerifiedAt = d.emailVerifiedAt || Date.now()
+        db.run(`UPDATE ${t} SET data = ? WHERE id = ?`, [JSON.stringify(d), row.id], () => {
+          updated++
+          pending--
+          if (pending === 0) finishTable()
+        })
+      }
+    })
+  }
+}
+
 function welcomeNotification(email, roleLabel) {
   const e = String(email || '').trim().toLowerCase()
   if (!e) return
   queueNotification(
     e,
     'Your EPHSRU Rugby Portal account is ready',
-    `An account has been created for you as ${roleLabel}. Sign in with this email address${APP_URL ? ` at ${APP_URL}` : ''} using the password your administrator gave you — you can change it any time via "Forgot password?" on the sign-in page.`
+    `An account has been created for you as ${roleLabel}. Sign in with this email address${APP_URL ? ` at ${APP_URL}` : ''} using the password your administrator gave you — you can change it any time via "Forgot password?" on the sign-in page.\n\nPlease confirm this email address belongs to you by opening this link:\n${emailVerifyLink(e)}`
   )
 }
 
@@ -1842,6 +1900,19 @@ function updatePasswordHash(email, passwordHash) {
 // not the email exists, so the endpoint can't be used to probe registrations. Hook an
 // email service where the token is logged; outside production the token is returned
 // directly so the flow works without SMTP.
+// Clicking the link in a verification email lands the SPA with ?verifyEmail=
+// which posts the token here. Public: the signed token itself is the proof.
+app.post('/api/auth/verify-email', (req, res) => {
+  const email = parseEmailVerifyToken(req.body?.token)
+  if (!email) return res.status(400).json({ error: 'invalid_token' })
+  markEmailVerified(email, (err, updated) => {
+    if (err) return res.status(500).json({ error: err.message })
+    if (!updated) return res.status(404).json({ error: 'no_account_for_email' })
+    writeAudit('', 'auth', 'email_verified', null, { email })
+    res.json({ ok: true, email, updated })
+  })
+})
+
 app.post('/api/auth/forgot', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase()
   if (!email) return res.status(400).json({ error: 'email_required' })
@@ -2567,6 +2638,7 @@ function profileFromRow(user, found) {
     surname: found.row.surname || d.surname || '',
     contactNumber: found.row.contactNumber || d.contactNumber || d.phone || '',
     photoUrl: d.photoUrl || '',
+    emailVerified: d.emailVerified === true,
     qualifications: d.qualifications || found.row.qualifications || '',
     experience: d.experience || found.row.experience || '',
     position: d.position || '',
@@ -2618,6 +2690,22 @@ app.put('/api/me', (req, res) => {
       }
     )
   })
+})
+
+// Signed-in users can (re)send their own verification email from My Profile.
+app.post('/api/me/verify-email', (req, res) => {
+  const email = String(req.user?.email || '').trim().toLowerCase()
+  if (!req.user?.role || !email) return res.status(403).json({ error: 'forbidden' })
+  queueNotification(
+    email,
+    'Verify your email address',
+    `Please confirm this email address belongs to you by opening this link:\n${emailVerifyLink(email)}\n\nIf you did not request this, you can ignore it.`
+  )
+  // Outside production the token is returned so the flow is testable without SMTP
+  if ((process.env.NODE_ENV || 'development') !== 'production') {
+    return res.json({ ok: true, sent: mailEnabled, token: emailVerifyToken(email) })
+  }
+  res.json({ ok: true, sent: mailEnabled })
 })
 
 // Personal document locker — every signed-in user can list, upload and remove

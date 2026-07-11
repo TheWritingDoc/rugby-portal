@@ -8,6 +8,7 @@ import { notifyError, notifySuccess } from '../utils/notify'
 type Profile = {
   role?: string
   email?: string
+  emailVerified?: boolean
   id?: string
   name?: string
   surname?: string
@@ -133,6 +134,21 @@ export default function MyProfile() {
     }
   }
 
+  const [verifyBusy, setVerifyBusy] = useState(false)
+  async function resendVerification() {
+    setVerifyBusy(true)
+    try {
+      const res = await fetch(apiUrl('/me/verify-email'), { method: 'POST', headers: authHeaders() })
+      if (!res.ok) throw new Error('send failed')
+      const data = await res.json().catch(() => ({}))
+      notifySuccess(data.sent ? 'Verification email sent — check your inbox.' : 'Verification link created — check your portal notifications.')
+    } catch (err: any) {
+      notifyError(`Could not send the verification email: ${err?.message || err}`)
+    } finally {
+      setVerifyBusy(false)
+    }
+  }
+
   async function removeDoc(id: string) {
     if (!confirm('Remove this document?')) return
     try {
@@ -222,7 +238,22 @@ export default function MyProfile() {
                   {field('Surname', 'surname')}
                   {field('Mobile', 'contactNumber', { type: 'tel', placeholder: '+27 or 0XXXXXXXXX' })}
                   <label className="block">
-                    <span className="text-xs font-medium text-gray-600">Email</span>
+                    <span className="flex items-center gap-2 text-xs font-medium text-gray-600">
+                      Email
+                      {me?.emailVerified ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200">✓ Verified</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={resendVerification}
+                          disabled={verifyBusy}
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-amber-300 transition-colors hover:bg-amber-100 disabled:opacity-60"
+                          title="We'll email you a verification link"
+                        >
+                          {verifyBusy ? 'Sending…' : 'Not verified — send link'}
+                        </button>
+                      )}
+                    </span>
                     <input value={me?.email || ''} disabled className="mt-1 w-full cursor-not-allowed rounded-md border border-gray-200 bg-gray-50 p-2 text-sm text-gray-500" />
                   </label>
                   {isStaff && field('Qualifications', 'qualifications', { placeholder: 'e.g. SARU Level 1' })}

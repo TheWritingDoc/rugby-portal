@@ -16,7 +16,8 @@ import AuditLogs from './pages/AuditLogs'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import { trackUserAction, trackPerformance, metrics } from './utils/metrics'
 import Toaster from './components/Toaster'
-import { notifyWarning } from './utils/notify'
+import { notifyWarning, notifySuccess, notifyError } from './utils/notify'
+import { apiUrl } from './utils/apiBase'
 
 type FormKey = 'school' | 'player' | 'coach' | 'referee' | 'admin'
 type ScreenKey = FormKey | 'home' | 'dashboard' | 'login' | 'approvals' | 'reports' | 'create-user' | 'privacy'
@@ -88,6 +89,24 @@ export default function App() {
     metrics.setUser(email)
     trackUserAction('app_init', 'application', { role })
     
+    // Email-verification links land here as /?verifyEmail=<signed token>
+    try {
+      const verifyToken = new URLSearchParams(window.location.search).get('verifyEmail')
+      if (verifyToken) {
+        window.history.replaceState(null, '', window.location.pathname)
+        fetch(apiUrl('/auth/verify-email'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: verifyToken }),
+        })
+          .then((r) => {
+            if (r.ok) notifySuccess('Email address verified — thank you!')
+            else notifyError('This verification link is not valid. You can request a new one from My Profile.')
+          })
+          .catch(() => notifyError('Could not reach the server to verify your email. Please try again.'))
+      }
+    } catch {}
+
     try {
       const target = localStorage.getItem('nav:target')
       const signedIn = Boolean(localStorage.getItem('auth:token'))
