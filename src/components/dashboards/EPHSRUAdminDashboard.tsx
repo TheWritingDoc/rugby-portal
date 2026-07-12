@@ -16,6 +16,7 @@ import PlayerProfileModal from '../modals/PlayerProfileModal'
 import StaffProfileModal from '../modals/StaffProfileModal'
 import SchoolPeopleBrowser from '../SchoolPeopleBrowser'
 import PlatformPanel from './PlatformPanel'
+import FixturesPanel from '../FixturesPanel'
 import { isPlatformOwner } from '../../utils/owner'
 import { schoolNameOf, zoneNameOf } from '../../utils/labels'
 
@@ -52,7 +53,7 @@ const ACCENT: Record<string, { soft: string; softHover: string; tint: string; so
 export default function EPHSRUAdminDashboard({ 
   zones, schools, players, coaches, referees, admins, onRefresh 
 }: EPHSRUAdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'zones' | 'schools' | 'users' | 'approvals' | 'analytics' | 'platform'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'zones' | 'schools' | 'users' | 'approvals' | 'fixtures' | 'analytics' | 'platform'>('overview')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedZone, setSelectedZone] = useState('')
   const [selectedZoneDetail, setSelectedZoneDetail] = useState<any>(null)
@@ -333,6 +334,7 @@ export default function EPHSRUAdminDashboard({
             { id: 'schools', label: 'Schools', icon: School },
             { id: 'users', label: 'Users', icon: Users },
             { id: 'approvals', label: 'Approvals', icon: CheckSquare, badge: pendingApprovals.length },
+            { id: 'fixtures', label: 'Fixtures', icon: Clock },
             { id: 'analytics', label: 'Analytics', icon: BarChart3 },
             // The business dashboard is the product owner's view, not a union feature
             ...(isPlatformOwner() ? [{ id: 'platform', label: 'Business', icon: Crown }] : [])
@@ -1008,6 +1010,8 @@ export default function EPHSRUAdminDashboard({
             </div>
           </div>
         )}
+
+        {activeTab === 'fixtures' && <FixturesPanel />}
 
         {activeTab === 'platform' && <PlatformPanel />}
 

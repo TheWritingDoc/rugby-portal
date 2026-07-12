@@ -60,6 +60,7 @@ export default function FixturesPanel({ manage = false, compact = false }: { man
   const myEmail = (localStorage.getItem('auth:email') || '').toLowerCase()
   const myRole = localStorage.getItem('auth:role') || ''
   const [sheetFor, setSheetFor] = useState<string | null>(null)
+  const [resultFor, setResultFor] = useState<string | null>(null)
 
   const [form, setForm] = useState({ homeSchoolId: '', awaySchoolId: '', ageGroup: 'U16', date: '', time: '14:00', venue: '', refereeEmail: '' })
 
@@ -147,10 +148,40 @@ export default function FixturesPanel({ manage = false, compact = false }: { man
               </div>
             </div>
           </div>
-          <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${STATUS_STYLE[f.status] || 'bg-gray-100 text-gray-600 ring-gray-200'}`}>
-            {f.status}
-          </span>
+          <div className="flex items-center gap-2">
+            {f.status === 'completed' && f.homeScore !== null && f.homeScore !== undefined && (
+              <span className="rounded-lg bg-gray-900 px-3 py-1 text-sm font-bold text-white" data-testid="fixture-score">
+                {f.homeScore} — {f.awayScore}
+              </span>
+            )}
+            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${STATUS_STYLE[f.status] || 'bg-gray-100 text-gray-600 ring-gray-200'}`}>
+              {f.status}
+            </span>
+          </div>
         </div>
+        {/* The assigned referee files the result once the match has kicked off;
+            the coordinator can file on their behalf or amend (audited) */}
+        {(() => {
+          const kicked = Date.now() >= Number(f.kickoffAt)
+          const refCanFile = refMine && kicked && f.status === 'scheduled'
+          const zcCanFile = manage && kicked && f.status !== 'cancelled'
+          if (!refCanFile && !zcCanFile) return null
+          const label = f.status === 'completed' ? 'Amend result' : 'File result'
+          return (
+            <div className="mt-3 border-t border-gray-100 pt-3">
+              <button
+                type="button"
+                onClick={() => setResultFor(resultFor === f.id ? null : f.id)}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${resultFor === f.id ? 'border border-gray-300 text-gray-600 hover:bg-gray-50' : f.status === 'completed' ? 'border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-purple-600 text-white hover:bg-purple-700'}`}
+              >
+                <Flag className="h-3.5 w-3.5" />
+                {resultFor === f.id ? 'Close' : label}
+              </button>
+              {resultFor === f.id && <ResultForm fixture={f} oneShot={refCanFile && !manage} onSaved={() => { setResultFor(null); load() }} />}
+            </div>
+          )
+        })()}
+
         {/* Coach / school admin of a competing school builds their team sheet here */}
         {(myRole === 'Coach' || myRole === 'SchoolAdmin') && mine && f.status === 'scheduled' && Date.now() < Number(f.kickoffAt) && (
           <div className="mt-3 border-t border-gray-100 pt-3">
@@ -478,6 +509,142 @@ function TeamSheetBuilder({ fixture, mySchool, onSaved }: { fixture: Fixture; my
           <ShowMoreButton total={roster.length} shown={shown} onMore={() => setShown((n) => n + 24)} className="mt-2" />
         </>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Result form (Phase 3). Scores + cards + notes. Card players come from the
+// submitted team sheets (server enforces the same). For the referee this is
+// one-shot — corrections go through the coordinator, whose amendments are
+// audited and clearly announced to both schools.
+// ---------------------------------------------------------------------------
+type SheetPlayer = { playerId: string; playerName?: string; jersey?: string }
+type CardEntry = { playerId: string; team: 'home' | 'away'; type: 'yellow' | 'red'; minute: number }
+
+function ResultForm({ fixture, oneShot, onSaved }: { fixture: Fixture; oneShot: boolean; onSaved: () => void }) {
+  const [homePlayers, setHomePlayers] = useState<SheetPlayer[]>([])
+  const [awayPlayers, setAwayPlayers] = useState<SheetPlayer[]>([])
+  const [homeScore, setHomeScore] = useState<string>(fixture.homeScore != null ? String(fixture.homeScore) : '')
+  const [awayScore, setAwayScore] = useState<string>(fixture.awayScore != null ? String(fixture.awayScore) : '')
+  const [cards, setCards] = useState<CardEntry[]>([])
+  const [notes, setNotes] = useState('')
+  const [cardPick, setCardPick] = useState('')
+  const [cardType, setCardType] = useState<'yellow' | 'red'>('yellow')
+  const [cardMinute, setCardMinute] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    ;(async () => {
+      const detail: any = await getJsonPath(`fixtures/${encodeURIComponent(fixture.id)}`)
+      const sheets = Array.isArray(detail?.teamSheets) ? detail.teamSheets : []
+      setHomePlayers(sheets.find((s: any) => String(s.schoolId) === String(fixture.homeSchoolId))?.players || [])
+      setAwayPlayers(sheets.find((s: any) => String(s.schoolId) === String(fixture.awaySchoolId))?.players || [])
+      if (detail?.report) {
+        setCards(Array.isArray(detail.report.cards) ? detail.report.cards : [])
+        setNotes(String(detail.report.notes || ''))
+      }
+    })()
+  }, [fixture.id, fixture.homeSchoolId, fixture.awaySchoolId])
+
+  const nameOf = (c: CardEntry) => {
+    const pool = c.team === 'home' ? homePlayers : awayPlayers
+    const p = pool.find((x) => String(x.playerId) === c.playerId)
+    return p?.playerName || c.playerId
+  }
+
+  function addCard() {
+    if (!cardPick) return notifyError('Choose the carded player')
+    const [team, playerId] = cardPick.split('|') as ['home' | 'away', string]
+    setCards((prev) => [...prev, { playerId, team, type: cardType, minute: Math.max(0, Math.min(120, Number(cardMinute) || 0)) }])
+    setCardPick(''); setCardMinute(''); setCardType('yellow')
+  }
+
+  async function submit() {
+    const hs = Number(homeScore); const as = Number(awayScore)
+    if (!Number.isInteger(hs) || hs < 0 || !Number.isInteger(as) || as < 0) return notifyError('Enter both final scores')
+    if (oneShot && !confirm('File the final result? As the match official you can file it once — corrections afterwards go through your zone coordinator.')) return
+    setSaving(true)
+    try {
+      const res = await postJsonPath(`fixtures/${encodeURIComponent(fixture.id)}/result`, { homeScore: hs, awayScore: as, cards, notes })
+      if (!res.ok) throw new Error((res.data as any)?.error || 'failed')
+      notifySuccess(`Result filed: ${schoolNameOf(fixture.homeSchoolId)} ${hs} — ${as} ${schoolNameOf(fixture.awaySchoolId)}. Both schools have been notified.`)
+      onSaved()
+    } catch (e: any) {
+      notifyError(`Could not file the result: ${e?.message || e}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-purple-200 bg-purple-50/40 p-3" data-testid="result-form">
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs font-medium text-gray-600">{schoolNameOf(fixture.homeSchoolId)} (home)</span>
+          <input inputMode="numeric" aria-label="Home score" className="mt-1 w-full rounded-md border border-gray-300 p-2 text-center text-lg font-bold"
+            value={homeScore} onChange={(e) => setHomeScore(e.target.value.replace(/\D/g, '').slice(0, 3))} placeholder="0" />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-gray-600">{schoolNameOf(fixture.awaySchoolId)} (away)</span>
+          <input inputMode="numeric" aria-label="Away score" className="mt-1 w-full rounded-md border border-gray-300 p-2 text-center text-lg font-bold"
+            value={awayScore} onChange={(e) => setAwayScore(e.target.value.replace(/\D/g, '').slice(0, 3))} placeholder="0" />
+        </label>
+      </div>
+
+      <div className="mt-3">
+        <div className="mb-1 text-xs font-medium text-gray-600">Cards</div>
+        {cards.length > 0 && (
+          <ul className="mb-2 space-y-1">
+            {cards.map((c, i) => (
+              <li key={i} className="flex items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs ring-1 ring-gray-200">
+                <span className={`inline-block h-3.5 w-2.5 rounded-[2px] ${c.type === 'red' ? 'bg-red-500' : 'bg-yellow-400'}`} />
+                <span className="min-w-0 flex-1 truncate">{nameOf(c)} <span className="text-gray-400">({c.team}{c.minute ? ` · ${c.minute}'` : ''})</span></span>
+                <button type="button" aria-label="Remove card" className="text-gray-400 hover:text-red-600" onClick={() => setCards((prev) => prev.filter((_, x) => x !== i))}>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <select aria-label="Carded player" className="min-w-40 flex-1 rounded-md border border-gray-300 py-1.5 pl-2 pr-7 text-xs" value={cardPick} onChange={(e) => setCardPick(e.target.value)}>
+            <option value="">Player…</option>
+            {homePlayers.length > 0 && (
+              <optgroup label={schoolNameOf(fixture.homeSchoolId)}>
+                {homePlayers.map((p) => <option key={p.playerId} value={`home|${p.playerId}`}>{p.jersey ? `#${p.jersey} ` : ''}{p.playerName || p.playerId}</option>)}
+              </optgroup>
+            )}
+            {awayPlayers.length > 0 && (
+              <optgroup label={schoolNameOf(fixture.awaySchoolId)}>
+                {awayPlayers.map((p) => <option key={p.playerId} value={`away|${p.playerId}`}>{p.jersey ? `#${p.jersey} ` : ''}{p.playerName || p.playerId}</option>)}
+              </optgroup>
+            )}
+          </select>
+          <select aria-label="Card type" className="rounded-md border border-gray-300 py-1.5 pl-2 pr-7 text-xs" value={cardType} onChange={(e) => setCardType(e.target.value as any)}>
+            <option value="yellow">Yellow</option>
+            <option value="red">Red</option>
+          </select>
+          <input aria-label="Card minute" placeholder="min" inputMode="numeric" className="w-14 rounded-md border border-gray-300 px-2 py-1.5 text-xs"
+            value={cardMinute} onChange={(e) => setCardMinute(e.target.value.replace(/\D/g, '').slice(0, 3))} />
+          <button type="button" onClick={addCard} className="rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">Add card</button>
+        </div>
+        {homePlayers.length === 0 && awayPlayers.length === 0 && (
+          <p className="mt-1 text-[11px] text-gray-400">No team sheets were submitted — cards can still be recorded by the coordinator afterwards.</p>
+        )}
+      </div>
+
+      <label className="mt-3 block">
+        <span className="text-xs font-medium text-gray-600">Match notes (injuries, incidents — optional)</span>
+        <textarea aria-label="Match notes" rows={2} className="mt-1 w-full rounded-md border border-gray-300 p-2 text-xs" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      </label>
+
+      <div className="mt-3 text-right">
+        <button type="button" onClick={submit} disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-4 py-2 text-xs font-semibold text-white hover:bg-purple-700 disabled:opacity-60">
+          {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {fixture.status === 'completed' ? 'Amend result' : 'File final result'}
+        </button>
+      </div>
     </div>
   )
 }

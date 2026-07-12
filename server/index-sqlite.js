@@ -2933,6 +2933,16 @@ app.get('/api/fixtures/:id', async (req, res) => {
       try { d = JSON.parse(s.data || '{}') } catch {}
       return { ...s, data: undefined, players: Array.isArray(d.players) ? d.players : [] }
     })
+    // Resolve player names so the referee's sheet view / result form can show
+    // people, not ids
+    const allIds = [...new Set(visible.flatMap((s) => s.players.map((p) => String(p.playerId || ''))))].filter(Boolean)
+    if (allIds.length) {
+      const nameRows = await dbAllP(`SELECT id, name, surname FROM players WHERE id IN (${allIds.map(() => '?').join(',')})`, allIds)
+      const nameById = new Map(nameRows.map((r) => [String(r.id), `${r.name || ''} ${r.surname || ''}`.trim()]))
+      for (const s of visible) {
+        s.players = s.players.map((p) => ({ ...p, playerName: nameById.get(String(p.playerId)) || '' }))
+      }
+    }
     res.json({ ...fixtureOut(row), teamSheets: visible })
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) })
@@ -3053,6 +3063,86 @@ app.post('/api/fixtures/:id/team-sheet', async (req, res) => {
       )
     }
     res.json({ ok: true, fixtureId: f.id, schoolId: sid, players: clean.length })
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
+
+// Phase 3: the referee files the result after kickoff — scores, cards, notes.
+// One-shot for the referee (disputes go to the coordinator, whose amendments
+// are audited); the coordinator/union can file or amend at any time.
+app.post('/api/fixtures/:id/result', async (req, res) => {
+  const user = req.user || {}
+  if (!user.role) return res.status(403).json({ error: 'forbidden' })
+  try {
+    const f = await dbGetP('SELECT * FROM fixtures WHERE id = ?', [String(req.params.id)])
+    if (!f) return res.status(404).json({ error: 'not_found' })
+    const isOverride = canManageFixtures(user, f.zoneId)
+    const isAssignedRef = user.role === 'Referee' &&
+      String(f.refereeEmail || '').toLowerCase() === String(user.email || '').trim().toLowerCase()
+    if (!isOverride && !isAssignedRef) return res.status(403).json({ error: 'forbidden' })
+    if (String(f.status) === 'cancelled') return res.status(400).json({ error: 'fixture_cancelled' })
+    if (Date.now() < Number(f.kickoffAt || 0)) return res.status(400).json({ error: 'match_not_started' })
+    if (String(f.status) === 'completed' && !isOverride) return res.status(409).json({ error: 'result_already_filed' })
+
+    const homeScore = Number(req.body?.homeScore)
+    const awayScore = Number(req.body?.awayScore)
+    if (!Number.isInteger(homeScore) || homeScore < 0 || !Number.isInteger(awayScore) || awayScore < 0) {
+      return res.status(400).json({ error: 'scores_required' })
+    }
+    const cards = Array.isArray(req.body?.cards) ? req.body.cards : []
+    if (cards.length > 30) return res.status(400).json({ error: 'too_many_cards' })
+
+    // A carded player must be on that side's team sheet (or, if no sheet was
+    // submitted, at least belong to that school)
+    const sheets = await dbAllP('SELECT schoolId, data FROM team_sheets WHERE fixtureId = ?', [f.id])
+    const sheetIds = new Map() // schoolId -> Set(playerIds)
+    for (const s of sheets) {
+      let d = {}
+      try { d = JSON.parse(s.data || '{}') } catch {}
+      sheetIds.set(String(s.schoolId), new Set((d.players || []).map((p) => String(p.playerId))))
+    }
+    const cleanCards = []
+    for (const c of cards) {
+      const team = c?.team === 'away' ? 'away' : 'home'
+      const schoolId = team === 'home' ? String(f.homeSchoolId) : String(f.awaySchoolId)
+      const playerId = String(c?.playerId || '')
+      const type = c?.type === 'red' ? 'red' : 'yellow'
+      const minute = Math.max(0, Math.min(120, Number(c?.minute) || 0))
+      if (!playerId) return res.status(400).json({ error: 'card_player_required' })
+      const onSheet = sheetIds.get(schoolId)
+      if (onSheet && onSheet.size > 0) {
+        if (!onSheet.has(playerId)) return res.status(400).json({ error: 'card_player_not_on_sheet', playerId })
+      } else {
+        const p = await dbGetP('SELECT schoolId FROM players WHERE id = ?', [playerId])
+        if (!p || String(p.schoolId) !== schoolId) return res.status(400).json({ error: 'card_player_not_in_school', playerId })
+      }
+      cleanCards.push({ playerId, team, type, minute })
+    }
+
+    let d = {}
+    try { d = JSON.parse(f.data || '{}') } catch {}
+    const previous = d.report || null
+    d.report = {
+      cards: cleanCards,
+      notes: String(req.body?.notes || '').slice(0, 2000),
+      filedBy: String(user.email || ''),
+      filedByRole: user.role,
+      filedAt: Date.now(),
+      ...(previous ? { amendedFrom: { filedBy: previous.filedBy, filedAt: previous.filedAt } } : {}),
+    }
+    await dbRunP('UPDATE fixtures SET status = ?, homeScore = ?, awayScore = ?, data = ? WHERE id = ?',
+      ['completed', homeScore, awayScore, JSON.stringify(d), f.id])
+    writeAudit(user.role, 'fixtures', previous ? 'result_amended' : 'result', { id: f.id, status: f.status }, { id: f.id, homeScore, awayScore, cards: cleanCards.length })
+
+    const [homeName, awayName] = await Promise.all([schoolDisplay(f.homeSchoolId), schoolDisplay(f.awaySchoolId)])
+    const summary = `${homeName} ${homeScore} — ${awayScore} ${awayName} (${f.ageGroup})${cleanCards.length ? ` · ${cleanCards.length} card${cleanCards.length === 1 ? '' : 's'}` : ''}`
+    notifyFixtureParties(f, previous ? 'Result amended' : 'Final result', summary, { includeReferee: !isAssignedRef })
+    try {
+      const coaches = await dbAllP('SELECT email FROM coaches WHERE schoolId IN (?, ?)', [String(f.homeSchoolId), String(f.awaySchoolId)])
+      for (const c of coaches) queueNotification(c.email, previous ? 'Result amended' : 'Final result', summary)
+    } catch {}
+    res.json({ ok: true, id: f.id, homeScore, awayScore, cards: cleanCards.length, status: 'completed' })
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) })
   }
