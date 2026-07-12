@@ -1777,6 +1777,39 @@ function lookupUserByEmail(email) {
   })
 }
 
+// One person, several hats: every row (across tables) carrying an email is a
+// role that email may sign in as. The admins table can hold multiple rows per
+// email (unique per email+role), so a zone coordinator can also be a school
+// admin — and separately hold coach/referee/player records.
+const ROLE_ORDER = ['EPHSRUAdmin', 'ZoneCoordinator', 'SchoolAdmin', 'Coach', 'Referee', 'Player']
+
+function lookupAllRolesByEmail(email) {
+  const e = String(email || '').trim().toLowerCase()
+  if (!e) return Promise.resolve([])
+  const parseHash = (row) => { try { return JSON.parse(row.data || '{}').passwordHash || '' } catch { return '' } }
+  return new Promise((resolve) => {
+    const out = []
+    db.all('SELECT role, zoneId, schoolId, name, surname, data FROM admins WHERE LOWER(email) = ?', [e], (err, admins) => {
+      for (const a of (err ? [] : admins || [])) {
+        out.push({ role: a.role || 'EPHSRUAdmin', zoneId: a.zoneId || '', schoolId: a.schoolId || '', name: a.name || '', surname: a.surname || '', passwordHash: parseHash(a) })
+      }
+      db.get('SELECT zoneId, schoolId, name, surname, data FROM coaches WHERE LOWER(email) = ? LIMIT 1', [e], (err2, c) => {
+        if (!err2 && c) out.push({ role: 'Coach', zoneId: c.zoneId || '', schoolId: c.schoolId || '', name: c.name || '', surname: c.surname || '', passwordHash: parseHash(c) })
+        db.get('SELECT zoneId, name, surname, data FROM referees WHERE LOWER(email) = ? LIMIT 1', [e], (err3, r) => {
+          if (!err3 && r) out.push({ role: 'Referee', zoneId: r.zoneId || '', schoolId: '', name: r.name || '', surname: r.surname || '', passwordHash: parseHash(r) })
+          db.get('SELECT zoneId, schoolId, name, surname, data FROM players WHERE LOWER(email) = ? LIMIT 1', [e], (err4, p) => {
+            if (!err4 && p) out.push({ role: 'Player', zoneId: p.zoneId || '', schoolId: p.schoolId || '', name: p.name || '', surname: p.surname || '', passwordHash: parseHash(p) })
+            out.sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role))
+            resolve(out)
+          })
+        })
+      })
+    })
+  })
+}
+
+const roleListOut = (roles) => roles.map((r) => ({ role: r.role, zoneId: r.zoneId, schoolId: r.schoolId, name: r.name, surname: r.surname }))
+
 const SELF_REGISTRATION_ROLES = new Set(['Player', 'Coach', 'Referee', 'SchoolAdmin'])
 
 // Legacy role-claim endpoint. In production it only issues anonymous registration-grade
@@ -1797,12 +1830,15 @@ app.post('/api/login', (req, res) => {
     // Knowing an email must never be enough to mint that user's token
     return res.status(403).json({ error: 'use_auth_login' })
   }
-  lookupUserByEmail(e).then((found) => {
-    if (found && found.role && found.role !== role) {
-      return res.status(403).json({ error: 'role_mismatch', role: found.role })
+  lookupAllRolesByEmail(e).then((roles) => {
+    // A known email may claim any of ITS OWN roles (multi-role people pick a
+    // hat); claiming a role it doesn't hold stays a mismatch.
+    const match = roles.find((r) => r.role === role)
+    if (roles.length > 0 && !match) {
+      return res.status(403).json({ error: 'role_mismatch', role: roles[0].role })
     }
-    const z = found && found.zoneId ? found.zoneId : zoneId
-    const s = found && found.schoolId ? found.schoolId : schoolId
+    const z = match && match.zoneId ? match.zoneId : zoneId
+    const s = match && match.schoolId ? match.schoolId : schoolId
     res.json({ token: sign({ role, zoneId: z, schoolId: s, email: e }) })
   })
 })
@@ -1814,18 +1850,44 @@ app.post('/api/auth/login', async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase()
   const password = String(req.body?.password || '')
   if (!email || !password) return res.status(400).json({ error: 'email_and_password_required' })
-  const user = await lookupUserByEmail(email)
-  if (!user) return res.status(404).json({ error: 'not_found' })
-  if (user.passwordHash) {
-    if (!bcrypt.compareSync(password, user.passwordHash)) {
+  const roles = await lookupAllRolesByEmail(email)
+  if (roles.length === 0) return res.status(404).json({ error: 'not_found' })
+  // One password per person: accept a match against any of their records'
+  // hashes (roles created at different times may carry different hashes).
+  const hashes = roles.map((r) => r.passwordHash).filter(Boolean)
+  if (hashes.length > 0) {
+    if (!hashes.some((h) => bcrypt.compareSync(password, h))) {
       return res.status(401).json({ error: 'invalid_credentials' })
     }
   } else if (env === 'production') {
     // Accounts created without a password cannot sign in to a public deployment
     return res.status(403).json({ error: 'password_setup_required' })
   }
+  const requested = String(req.body?.role || '')
+  let user = roles[0]
+  if (requested) {
+    user = roles.find((r) => r.role === requested)
+    if (!user) return res.status(400).json({ error: 'role_not_available' })
+  } else if (roles.length > 1) {
+    // Several hats and no choice made: hand back the list, no token yet.
+    return res.json({ multi: true, email, roles: roleListOut(roles) })
+  }
   const token = sign({ role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, email })
-  res.json({ token, role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, name: user.name, surname: user.surname })
+  res.json({ token, role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, name: user.name, surname: user.surname, roles: roleListOut(roles) })
+})
+
+// In-app role switching: a signed-in user swaps to another of THEIR OWN roles
+// without re-entering the password (the valid token is the proof of session).
+app.post('/api/auth/switch-role', async (req, res) => {
+  const email = String(req.user?.email || '').trim().toLowerCase()
+  if (!req.user?.role || !email) return res.status(403).json({ error: 'forbidden' })
+  const target = String(req.body?.role || '')
+  const roles = await lookupAllRolesByEmail(email)
+  const user = roles.find((r) => r.role === target)
+  if (!user) return res.status(400).json({ error: 'role_not_available' })
+  writeAudit(req.user.role, 'auth', 'role_switch', { role: req.user.role }, { role: target, email })
+  const token = sign({ role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, email })
+  res.json({ token, role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, name: user.name, surname: user.surname, roles: roleListOut(roles) })
 })
 
 // Social sign-in: the provider proves the user owns the email, then the email must match an
@@ -2621,7 +2683,11 @@ function findOwnRow(user, cb) {
   const table = ME_TABLES[user?.role]
   const email = String(user?.email || '').trim().toLowerCase()
   if (!table || !email) return cb(null, null)
-  db.get(`SELECT * FROM ${table} WHERE lower(email) = ?`, [email], (err, row) => cb(err, row ? { table, row } : null))
+  // The admins table can hold several of a person's hats — pick the row for
+  // the role they are currently signed in as.
+  const roleFilter = table === 'admins' ? ' AND role = ?' : ''
+  const params = table === 'admins' ? [email, String(user.role)] : [email]
+  db.get(`SELECT * FROM ${table} WHERE lower(email) = ?${roleFilter}`, params, (err, row) => cb(err, row ? { table, row } : null))
 }
 
 // Shape the own-profile payload consistently for GET and PUT. Extra role
@@ -2653,9 +2719,10 @@ function profileFromRow(user, found) {
 
 app.get('/api/me', (req, res) => {
   if (!req.user?.role || !req.user?.email) return res.status(403).json({ error: 'forbidden' })
-  findOwnRow(req.user, (err, found) => {
+  findOwnRow(req.user, async (err, found) => {
     if (err) return res.status(500).json({ error: err.message })
-    res.json(profileFromRow(req.user, found))
+    const roles = await lookupAllRolesByEmail(req.user.email).catch(() => [])
+    res.json({ ...profileFromRow(req.user, found), roles: roleListOut(roles) })
   })
 })
 

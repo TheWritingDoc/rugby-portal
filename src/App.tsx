@@ -14,6 +14,7 @@ import Approvals from './pages/Approvals'
 import Reports from './pages/Reports'
 import AuditLogs from './pages/AuditLogs'
 import PrivacyPolicy from './pages/PrivacyPolicy'
+import RoleSwitcher from './components/RoleSwitcher'
 import { trackUserAction, trackPerformance, metrics } from './utils/metrics'
 import Toaster from './components/Toaster'
 import { notifyWarning, notifySuccess, notifyError } from './utils/notify'
@@ -174,11 +175,7 @@ export default function App() {
                 Back
               </button>
             )}
-            {isLoggedIn && (
-              <span data-testid="role-badge" className="inline-flex items-center gap-1 rounded-full bg-brand/10 px-3 py-1.5 text-sm font-medium text-brand ring-1 ring-brand/30">
-                {ROLE_LABELS[role] || role}
-              </span>
-            )}
+            {isLoggedIn && <RoleSwitcher role={role} />}
           </div>
           <div className="flex items-center gap-2">
             {isLoggedIn && (role === 'EPHSRUAdmin' || role === 'ZoneCoordinator' || role === 'SchoolAdmin' || role === 'Coach') && (
@@ -197,7 +194,7 @@ export default function App() {
               onClick={() => {
                 // Clear the whole session INCLUDING nav:target — otherwise the
                 // reload boots straight back into an empty dashboard.
-                for (const k of ['auth:token', 'auth:role', 'auth:email', 'auth:zoneId', 'auth:schoolId', 'auth:name', 'auth:surname', 'nav:target', 'reg:email', 'reg:password', 'reg:adminRole', 'reg:form']) {
+                for (const k of ['auth:token', 'auth:role', 'auth:email', 'auth:zoneId', 'auth:schoolId', 'auth:name', 'auth:surname', 'auth:roles', 'nav:target', 'reg:email', 'reg:password', 'reg:adminRole', 'reg:form']) {
                   try { localStorage.removeItem(k) } catch {}
                 }
                 setRole('Player')

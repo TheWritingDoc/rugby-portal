@@ -3,6 +3,7 @@ import { adoptSession, login } from '../utils/auth'
 import { getEntities } from '../utils/db'
 import { apiUrl } from '../utils/apiBase'
 import { notifyError, notifySuccess } from '../utils/notify'
+import { schoolNameOf, zoneNameOf } from '../utils/labels'
 import bcrypt from 'bcryptjs'
 
 type Role = 'Player' | 'Referee' | 'Coach' | 'SchoolAdmin' | 'ZoneCoordinator' | 'EPHSRUAdmin'
@@ -37,12 +38,36 @@ export default function Login({ onRole, onSuccess }: { onRole: (r: Role) => void
   const [newPassword2, setNewPassword2] = useState('')
   const googleBtnRef = useRef<HTMLDivElement | null>(null)
 
-  function finishLogin(token: string, info: { role: Role; zoneId?: string; schoolId?: string; name?: string; surname?: string }, userEmail: string) {
+  // A multi-role person picks which hat to wear before the token is issued
+  const [roleChoices, setRoleChoices] = useState<{ role: Role; zoneId?: string; schoolId?: string; name?: string }[] | null>(null)
+  const [choosing, setChoosing] = useState(false)
+
+  function finishLogin(token: string, info: { role: Role; zoneId?: string; schoolId?: string; name?: string; surname?: string; roles?: any[] }, userEmail: string) {
     adoptSession(token, { ...info, email: userEmail })
+    try { localStorage.setItem('auth:roles', JSON.stringify(info.roles || [{ role: info.role, zoneId: info.zoneId, schoolId: info.schoolId }])) } catch {}
     onRole(info.role)
     try { localStorage.setItem('nav:target', 'dashboard') } catch {}
     notifySuccess(`Signed in${info.name ? ` as ${info.name}` : ''}`)
     if (onSuccess) onSuccess()
+  }
+
+  async function continueAs(role: Role) {
+    setChoosing(true)
+    setError(null)
+    try {
+      const res = await fetch(apiUrl('/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, role }),
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data?.token) finishLogin(data.token, data, email)
+      else setError('Could not sign in with that role. Please try again.')
+    } catch {
+      setError('Unable to sign in')
+    } finally {
+      setChoosing(false)
+    }
   }
 
   async function oauthSignIn(provider: 'google' | 'facebook', payload: Record<string, string>) {
@@ -112,6 +137,11 @@ export default function Login({ onRole, onSuccess }: { onRole: (r: Role) => void
       })
       if (res.ok) {
         const data = await res.json()
+        if (data?.multi && Array.isArray(data.roles)) {
+          // Several roles on this account — ask which one to continue as
+          setRoleChoices(data.roles)
+          return
+        }
         finishLogin(data.token, data, email)
         return
       }
@@ -212,6 +242,38 @@ export default function Login({ onRole, onSuccess }: { onRole: (r: Role) => void
   }
 
   const hasSocial = !!GOOGLE_CLIENT_ID || !!FACEBOOK_APP_ID
+
+  // Role picker: shown when the account holds more than one role
+  if (roleChoices) {
+    const LABELS: Record<string, string> = { EPHSRUAdmin: 'EPHSRU Admin', ZoneCoordinator: 'Zone Coordinator', SchoolAdmin: 'School Admin', Coach: 'Coach', Referee: 'Referee', Player: 'Player' }
+    return (
+      <div className="space-y-3" data-testid="role-picker">
+        <p className="text-sm text-gray-600">This account holds more than one role. Continue as:</p>
+        {roleChoices.map((r) => (
+          <button
+            key={r.role}
+            type="button"
+            disabled={choosing}
+            onClick={() => continueAs(r.role)}
+            className="flex w-full items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3 text-left shadow-sm transition-colors hover:border-brand/40 hover:bg-brand/5 disabled:opacity-60"
+          >
+            <span>
+              <span className="block text-sm font-semibold text-gray-900">{LABELS[r.role] || r.role}</span>
+              <span className="block text-xs text-gray-500">
+                {r.schoolId ? schoolNameOf(r.schoolId) : r.zoneId ? zoneNameOf(r.zoneId) : 'Union-wide'}
+              </span>
+            </span>
+            <span className="text-brand">→</span>
+          </button>
+        ))}
+        {error && <div role="alert" className="rounded-md bg-red-100 p-2 text-sm text-red-700">{error}</div>}
+        <button type="button" className="w-full rounded-md border border-gray-200 p-2 text-sm text-gray-600 hover:bg-gray-50" onClick={() => { setRoleChoices(null); setError(null) }}>
+          Back
+        </button>
+      </div>
+    )
+  }
+
   return (
     <form onSubmit={submit} className="space-y-3">
       <label className="block">

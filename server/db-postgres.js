@@ -240,7 +240,7 @@ async function initSchema() {
   // An email identifies exactly one account per table (logins resolve by
   // email). Dedupe legacy rows (keep the newest ctid), then enforce with a
   // partial unique index — rows without an email are unaffected.
-  for (const t of ['admins', 'coaches', 'referees', 'players']) {
+  for (const t of ['coaches', 'referees', 'players']) {
     try {
       await pool.query(`DELETE FROM ${t} a USING ${t} b
         WHERE a.ctid < b.ctid AND lower(a.email) = lower(b.email)
@@ -249,6 +249,17 @@ async function initSchema() {
     } catch (e) {
       console.error(`[pg] unique email index on ${t} skipped:`, e?.message || e)
     }
+  }
+  // Admins are unique per (email, role): multi-role accounts hold several
+  // admin-tier posts under one email, but never the same post twice.
+  try {
+    await pool.query(`DELETE FROM admins a USING admins b
+      WHERE a.ctid < b.ctid AND lower(a.email) = lower(b.email) AND a.role = b.role
+        AND a.email IS NOT NULL AND a.email <> '' AND b.email IS NOT NULL AND b.email <> ''`)
+    await pool.query('DROP INDEX IF EXISTS ux_admins_email')
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS ux_admins_email_role ON admins(lower(email), role) WHERE email IS NOT NULL AND email <> ''`)
+  } catch (e) {
+    console.error('[pg] unique email+role index on admins skipped:', e?.message || e)
   }
 
   // Seed the school catalog once (only if empty), mirroring db-sqlite.js.

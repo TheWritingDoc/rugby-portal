@@ -104,8 +104,9 @@ CREATE TABLE IF NOT EXISTS team_sheets (
   id TEXT PRIMARY KEY, fixtureId TEXT NOT NULL, schoolId TEXT NOT NULL,
   submittedBy TEXT, submittedAt BIGINT, data TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_team_sheets_fixture_school ON team_sheets(fixtureId, schoolId);
--- An email identifies exactly one account per table (rows without email exempt)
-CREATE UNIQUE INDEX IF NOT EXISTS ux_admins_email   ON admins(lower(email))   WHERE email IS NOT NULL AND email <> '';
+-- An email identifies exactly one account per table (rows without email exempt).
+-- Admins are unique per (email, role) so one person can hold several admin posts.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_admins_email_role ON admins(lower(email), role) WHERE email IS NOT NULL AND email <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS ux_coaches_email  ON coaches(lower(email))  WHERE email IS NOT NULL AND email <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS ux_referees_email ON referees(lower(email)) WHERE email IS NOT NULL AND email <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS ux_players_email  ON players(lower(email))  WHERE email IS NOT NULL AND email <> '';
