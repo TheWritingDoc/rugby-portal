@@ -15,6 +15,7 @@ import Reports from './pages/Reports'
 import AuditLogs from './pages/AuditLogs'
 import PrivacyPolicy from './pages/PrivacyPolicy'
 import RoleSwitcher from './components/RoleSwitcher'
+import AddRoleToUser from './components/AddRoleToUser'
 import { trackUserAction, trackPerformance, metrics } from './utils/metrics'
 import Toaster from './components/Toaster'
 import { notifyWarning, notifySuccess, notifyError } from './utils/notify'
@@ -245,6 +246,9 @@ export default function App() {
           <Screen title="Create User" subtitle="Create a new user account below.">
             <Selection onChoose={(k) => navigate(k as ScreenKey)} role={role} restrictByRole={true} />
           </Screen>
+        )}
+        {screen === 'create-user' && ['EPHSRUAdmin', 'ZoneCoordinator', 'SchoolAdmin'].includes(role) && (
+          <AddRoleToUser role={role} />
         )}
         {screen === 'privacy' && (
           <Screen title="Privacy Policy & Terms">

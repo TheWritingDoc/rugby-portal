@@ -1890,6 +1890,104 @@ app.post('/api/auth/switch-role', async (req, res) => {
   res.json({ token, role: user.role, zoneId: user.zoneId, schoolId: user.schoolId, name: user.name, surname: user.surname, roles: roleListOut(roles) })
 })
 
+// --- Add a role to an existing user (hierarchy-scoped) -----------------------
+// Which roles a granter may hand out, and the scope forced onto the grant.
+// EPHSRU admin grants anything anywhere; a zone coordinator grants within the
+// zone the same posts they can create (school admins, referees); a school
+// admin grants within their school (coaches, players) plus zone referees.
+function grantableRolesFor(user) {
+  if (!user) return []
+  if (user.role === 'EPHSRUAdmin') return ROLE_ORDER.slice()
+  if (user.role === 'ZoneCoordinator') return ['SchoolAdmin', 'Referee']
+  if (user.role === 'SchoolAdmin') return ['Coach', 'Referee', 'Player']
+  return []
+}
+
+// Admins may look up which hats an email already wears before granting a new
+// one (never exposes password hashes).
+app.get('/api/users/roles', (req, res) => {
+  if (grantableRolesFor(req.user).length === 0) return res.status(403).json({ error: 'forbidden' })
+  const email = String(req.query.email || '').trim().toLowerCase()
+  if (!email) return res.status(400).json({ error: 'email_required' })
+  lookupAllRolesByEmail(email).then((roles) => {
+    if (roles.length === 0) return res.status(404).json({ error: 'not_found' })
+    res.json({ email, roles: roleListOut(roles) })
+  })
+})
+
+app.post('/api/users/add-role', async (req, res) => {
+  const granter = req.user
+  const grantable = grantableRolesFor(granter)
+  if (grantable.length === 0) return res.status(403).json({ error: 'forbidden' })
+  const email = String(req.body?.email || '').trim().toLowerCase()
+  const role = String(req.body?.role || '')
+  if (!email) return res.status(400).json({ error: 'email_required' })
+  if (!grantable.includes(role)) return res.status(403).json({ error: 'role_not_grantable' })
+
+  // Scope: sub-union granters can only grant inside their own patch.
+  let zoneId = String(req.body?.zoneId || '')
+  let schoolId = String(req.body?.schoolId || '')
+  if (granter.role === 'ZoneCoordinator') {
+    zoneId = String(granter.zoneId || '')
+    if (role !== 'Referee') schoolId = schoolId || ''
+    if (role === 'SchoolAdmin' && !schoolId) return res.status(400).json({ error: 'school_required' })
+  } else if (granter.role === 'SchoolAdmin') {
+    zoneId = String(granter.zoneId || '')
+    schoolId = role === 'Referee' ? '' : String(granter.schoolId || '')
+  } else {
+    // EPHSRU admin must still say where the new hat lives (unless union-wide)
+    if (['ZoneCoordinator', 'SchoolAdmin', 'Coach', 'Player'].includes(role) && !zoneId) {
+      return res.status(400).json({ error: 'zone_required' })
+    }
+    if (['SchoolAdmin', 'Coach', 'Player'].includes(role) && !schoolId) {
+      return res.status(400).json({ error: 'school_required' })
+    }
+    if (role === 'EPHSRUAdmin') { zoneId = ''; schoolId = '' }
+  }
+  // A zone coordinator granting SchoolAdmin must pick a school in their zone;
+  // scope check reuses the same rule the create-admin endpoint enforces.
+  if (granter.role === 'ZoneCoordinator' && role === 'SchoolAdmin' &&
+      !withinScope('admins', granter, { role, zoneId, schoolId })) {
+    return res.status(403).json({ error: 'scope' })
+  }
+
+  const existing = await lookupAllRolesByEmail(email)
+  if (existing.length === 0) return res.status(404).json({ error: 'user_not_found' })
+  if (existing.some((r) => r.role === role)) return res.status(409).json({ error: 'role_already_held' })
+
+  // The new hat inherits identity + the one password the person already has.
+  const source = existing.find((r) => r.passwordHash) || existing[0]
+  const id = crypto.randomUUID()
+  const ts = Date.now()
+  const body = {
+    name: source.name, surname: source.surname, email,
+    zoneId, schoolId,
+    passwordHash: source.passwordHash || undefined,
+    grantedBy: granter.email || granter.role, grantedByRole: granter.role, grantedAt: ts,
+  }
+  const data = JSON.stringify(body)
+  const done = (err) => {
+    if (err) return insertError(res, err)
+    writeAudit(granter.role, 'users', 'role_granted', { email, roles: existing.map((r) => r.role) }, { email, role, zoneId, schoolId })
+    queueNotification(email, 'New role added to your account',
+      `You can now also sign in as ${role === 'EPHSRUAdmin' ? 'an EPHSRU Admin' : `a ${role.replace(/([A-Z])/g, ' $1').trim()}`}. Use the role menu in the header to switch.`)
+    lookupAllRolesByEmail(email).then((roles) => res.json({ id, ts, email, role, roles: roleListOut(roles) }))
+  }
+  if (role === 'Coach') {
+    db.run('INSERT INTO coaches (id, zoneId, schoolId, name, surname, email, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, zoneId, schoolId, body.name, body.surname, email, data, ts], done)
+  } else if (role === 'Referee') {
+    db.run('INSERT INTO referees (id, name, surname, email, data, ts, zoneId) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [id, body.name, body.surname, email, data, ts, zoneId || null], done)
+  } else if (role === 'Player') {
+    db.run('INSERT INTO players (id, zoneId, schoolId, name, surname, email, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, zoneId, schoolId, body.name, body.surname, email, data, ts], done)
+  } else {
+    db.run('INSERT INTO admins (id, name, surname, email, role, zoneId, schoolId, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, body.name, body.surname, email, role, zoneId || null, schoolId || null, data, ts], done)
+  }
+})
+
 // Social sign-in: the provider proves the user owns the email, then the email must match an
 // already-registered portal account (role and scope always come from our own records).
 app.post('/api/auth/oauth', async (req, res) => {
