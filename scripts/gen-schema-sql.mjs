@@ -92,6 +92,18 @@ CREATE INDEX IF NOT EXISTS idx_migrations_player ON migrations(playerId, migrati
 CREATE INDEX IF NOT EXISTS idx_players_idnumber ON players(idNumber);
 CREATE INDEX IF NOT EXISTS idx_players_email ON players(email);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_schools_schoolid ON schools(schoolId);
+
+-- Match-day module
+CREATE TABLE IF NOT EXISTS fixtures (
+  id TEXT PRIMARY KEY, zoneId TEXT NOT NULL, homeSchoolId TEXT NOT NULL, awaySchoolId TEXT NOT NULL,
+  ageGroup TEXT NOT NULL, kickoffAt BIGINT NOT NULL, venue TEXT, refereeEmail TEXT,
+  status TEXT DEFAULT 'scheduled', homeScore INTEGER, awayScore INTEGER, data TEXT, ts BIGINT);
+CREATE INDEX IF NOT EXISTS ix_fixtures_zone_kick ON fixtures(zoneId, kickoffAt);
+CREATE INDEX IF NOT EXISTS ix_fixtures_ref ON fixtures(refereeEmail, kickoffAt);
+CREATE TABLE IF NOT EXISTS team_sheets (
+  id TEXT PRIMARY KEY, fixtureId TEXT NOT NULL, schoolId TEXT NOT NULL,
+  submittedBy TEXT, submittedAt BIGINT, data TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_team_sheets_fixture_school ON team_sheets(fixtureId, schoolId);
 -- An email identifies exactly one account per table (rows without email exempt)
 CREATE UNIQUE INDEX IF NOT EXISTS ux_admins_email   ON admins(lower(email))   WHERE email IS NOT NULL AND email <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS ux_coaches_email  ON coaches(lower(email))  WHERE email IS NOT NULL AND email <> '';

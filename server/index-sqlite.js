@@ -2787,6 +2787,210 @@ app.post('/api/me/photo', (req, res) => {
 })
 
 // ===========================================================================
+// Match-day (Phase 1): fixtures + referee assignment.
+// A fixture belongs to the organising zone; visibility follows the same
+// hierarchy as everything else. The referee's report will fold into
+// fixtures.data.report in Phase 3.
+// ===========================================================================
+const FIXTURE_AGE_GROUPS = new Set(['U15', 'U16', 'U17', 'U19'])
+const FIXTURE_EDIT_STATUSES = new Set(['scheduled', 'cancelled', 'postponed'])
+
+function dbGetP(sql, params) {
+  return new Promise((resolve, reject) => db.get(sql, params, (e, r) => (e ? reject(e) : resolve(r || null))))
+}
+function dbRunP(sql, params) {
+  return new Promise((resolve, reject) => db.run(sql, params, function (e) { e ? reject(e) : resolve(this) }))
+}
+
+function fixtureOut(row) {
+  if (!row) return row
+  let d = {}
+  try { d = JSON.parse(row.data || '{}') } catch {}
+  const { data, ...rest } = row
+  return { ...rest, notes: d.notes || '', report: d.report || null }
+}
+
+// Union manages everything; a zone coordinator only their own zone's fixtures
+function canManageFixtures(user, zoneId) {
+  if (user?.role === 'EPHSRUAdmin') return true
+  return user?.role === 'ZoneCoordinator' && String(user.zoneId || '') !== '' && String(user.zoneId) === String(zoneId)
+}
+
+// Can this user see this fixture at all?
+function canSeeFixture(user, f) {
+  const role = user?.role
+  if (!role) return false
+  if (role === 'EPHSRUAdmin') return true
+  if (role === 'ZoneCoordinator') return String(f.zoneId) === String(user.zoneId || '')
+  if (role === 'Referee') {
+    const me = String(user.email || '').trim().toLowerCase()
+    return (me && String(f.refereeEmail || '').toLowerCase() === me) || String(f.zoneId) === String(user.zoneId || '')
+  }
+  const sid = String(user.schoolId || '')
+  return !!sid && (String(f.homeSchoolId) === sid || String(f.awaySchoolId) === sid)
+}
+
+async function schoolDisplay(schoolId) {
+  try {
+    const r = await dbGetP('SELECT data FROM schools WHERE schoolId = ? LIMIT 1', [String(schoolId || '')])
+    const d = r ? JSON.parse(r.data || '{}') : {}
+    return String(d.name || schoolId || '')
+  } catch { return String(schoolId || '') }
+}
+
+async function notifyFixtureParties(f, subject, message, { includeReferee = true } = {}) {
+  try {
+    const admins = await dbAllP(
+      `SELECT email FROM admins WHERE role = 'SchoolAdmin' AND (schoolId = ? OR schoolId = ?)`,
+      [String(f.homeSchoolId), String(f.awaySchoolId)]
+    )
+    for (const a of admins) queueNotification(a.email, subject, message)
+    if (includeReferee && f.refereeEmail) queueNotification(f.refereeEmail, subject, message)
+  } catch {}
+}
+
+app.post('/api/fixtures', async (req, res) => {
+  const user = req.user || {}
+  const body = req.body || {}
+  const zoneId = user.role === 'ZoneCoordinator' ? String(user.zoneId || '') : String(body.zoneId || user.zoneId || '')
+  if (!canManageFixtures(user, zoneId)) return res.status(403).json({ error: 'forbidden' })
+  const homeSchoolId = String(body.homeSchoolId || '')
+  const awaySchoolId = String(body.awaySchoolId || '')
+  const ageGroup = String(body.ageGroup || '')
+  const kickoffAt = Number(body.kickoffAt || 0)
+  if (!zoneId || !homeSchoolId || !awaySchoolId) return res.status(400).json({ error: 'zone_and_schools_required' })
+  if (homeSchoolId === awaySchoolId) return res.status(400).json({ error: 'schools_must_differ' })
+  if (!FIXTURE_AGE_GROUPS.has(ageGroup)) return res.status(400).json({ error: 'invalid_age_group' })
+  if (!Number.isFinite(kickoffAt) || kickoffAt <= 0) return res.status(400).json({ error: 'kickoff_required' })
+  const refereeEmail = String(body.refereeEmail || '').trim().toLowerCase() || null
+  const id = crypto.randomUUID()
+  const ts = Date.now()
+  const data = JSON.stringify({ createdBy: String(user.email || ''), notes: String(body.notes || '') })
+  try {
+    await dbRunP(
+      `INSERT INTO fixtures (id, zoneId, homeSchoolId, awaySchoolId, ageGroup, kickoffAt, venue, refereeEmail, status, data, ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)`,
+      [id, zoneId, homeSchoolId, awaySchoolId, ageGroup, kickoffAt, String(body.venue || ''), refereeEmail, data, ts]
+    )
+    writeAudit(user.role, 'fixtures', 'create', null, { id, zoneId, homeSchoolId, awaySchoolId, ageGroup, kickoffAt })
+    const [homeName, awayName] = await Promise.all([schoolDisplay(homeSchoolId), schoolDisplay(awaySchoolId)])
+    const when = new Date(kickoffAt).toLocaleString()
+    const f = { homeSchoolId, awaySchoolId, refereeEmail }
+    notifyFixtureParties(f, 'New fixture scheduled', `${ageGroup}: ${homeName} vs ${awayName} on ${when}${body.venue ? ` at ${body.venue}` : ''}.`)
+    if (refereeEmail) queueNotification(refereeEmail, 'Referee appointment', `You have been appointed to referee ${homeName} vs ${awayName} (${ageGroup}) on ${when}${body.venue ? ` at ${body.venue}` : ''}.`)
+    res.json({ id, zoneId, homeSchoolId, awaySchoolId, ageGroup, kickoffAt, venue: String(body.venue || ''), refereeEmail, status: 'scheduled', ts })
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
+
+app.get('/api/fixtures', async (req, res) => {
+  const user = req.user || {}
+  if (!user.role) return res.status(403).json({ error: 'forbidden' })
+  const params = []
+  let where = '1=1'
+  if (user.role === 'EPHSRUAdmin') {
+    where = '1=1'
+  } else if (user.role === 'ZoneCoordinator') {
+    where = 'zoneId = ?'; params.push(String(user.zoneId || ''))
+  } else if (user.role === 'Referee') {
+    where = '(LOWER(COALESCE(refereeEmail, \'\')) = ? OR zoneId = ?)'
+    params.push(String(user.email || '').trim().toLowerCase(), String(user.zoneId || ''))
+  } else {
+    const sid = String(user.schoolId || '')
+    if (!sid) return res.json([])
+    where = '(homeSchoolId = ? OR awaySchoolId = ?)'; params.push(sid, sid)
+  }
+  if (String(req.query.upcoming || '') === '1') {
+    where += ' AND kickoffAt >= ?'
+    params.push(Date.now() - 3 * 3600_000) // a match stays "upcoming" through its own afternoon
+  }
+  try {
+    const rows = await dbAllP(`SELECT * FROM fixtures WHERE ${where} ORDER BY kickoffAt ASC LIMIT 500`, params)
+    res.json(rows.map(fixtureOut))
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
+
+app.get('/api/fixtures/:id', async (req, res) => {
+  const user = req.user || {}
+  if (!user.role) return res.status(403).json({ error: 'forbidden' })
+  try {
+    const row = await dbGetP('SELECT * FROM fixtures WHERE id = ?', [String(req.params.id)])
+    if (!row) return res.status(404).json({ error: 'not_found' })
+    if (!canSeeFixture(user, row)) return res.status(403).json({ error: 'forbidden' })
+    const sheets = await dbAllP('SELECT * FROM team_sheets WHERE fixtureId = ?', [row.id])
+    const kicked = Date.now() >= Number(row.kickoffAt || 0)
+    const privileged = user.role === 'EPHSRUAdmin' || user.role === 'ZoneCoordinator' ||
+      (user.role === 'Referee' && String(row.refereeEmail || '').toLowerCase() === String(user.email || '').toLowerCase())
+    const visible = sheets.filter((s) => {
+      if (privileged || kicked) return true
+      // Before kickoff a school only sees its own sheet — no early scouting
+      return String(s.schoolId) === String(user.schoolId || '')
+    }).map((s) => {
+      let d = {}
+      try { d = JSON.parse(s.data || '{}') } catch {}
+      return { ...s, data: undefined, players: Array.isArray(d.players) ? d.players : [] }
+    })
+    res.json({ ...fixtureOut(row), teamSheets: visible })
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
+
+app.put('/api/fixtures/:id', async (req, res) => {
+  const user = req.user || {}
+  try {
+    const row = await dbGetP('SELECT * FROM fixtures WHERE id = ?', [String(req.params.id)])
+    if (!row) return res.status(404).json({ error: 'not_found' })
+    if (!canManageFixtures(user, row.zoneId)) return res.status(403).json({ error: 'forbidden' })
+    const body = req.body || {}
+    const next = { ...row }
+    if (body.kickoffAt !== undefined) {
+      const k = Number(body.kickoffAt)
+      if (!Number.isFinite(k) || k <= 0) return res.status(400).json({ error: 'invalid_kickoff' })
+      next.kickoffAt = k
+    }
+    if (body.venue !== undefined) next.venue = String(body.venue || '')
+    if (body.ageGroup !== undefined) {
+      if (!FIXTURE_AGE_GROUPS.has(String(body.ageGroup))) return res.status(400).json({ error: 'invalid_age_group' })
+      next.ageGroup = String(body.ageGroup)
+    }
+    if (body.status !== undefined) {
+      // Completion happens through the result flow (Phase 3), never a bare status edit
+      if (!FIXTURE_EDIT_STATUSES.has(String(body.status))) return res.status(400).json({ error: 'invalid_status' })
+      next.status = String(body.status)
+    }
+    let refereeChanged = false
+    if (body.refereeEmail !== undefined) {
+      const nextRef = String(body.refereeEmail || '').trim().toLowerCase() || null
+      refereeChanged = nextRef !== (row.refereeEmail ? String(row.refereeEmail).toLowerCase() : null)
+      next.refereeEmail = nextRef
+    }
+    let d = {}
+    try { d = JSON.parse(row.data || '{}') } catch {}
+    if (body.notes !== undefined) d.notes = String(body.notes || '')
+    await dbRunP(
+      'UPDATE fixtures SET kickoffAt = ?, venue = ?, ageGroup = ?, status = ?, refereeEmail = ?, data = ? WHERE id = ?',
+      [next.kickoffAt, next.venue, next.ageGroup, next.status, next.refereeEmail, JSON.stringify(d), row.id]
+    )
+    writeAudit(user.role, 'fixtures', 'update', { id: row.id, status: row.status, refereeEmail: row.refereeEmail }, { id: row.id, status: next.status, refereeEmail: next.refereeEmail })
+    const [homeName, awayName] = await Promise.all([schoolDisplay(row.homeSchoolId), schoolDisplay(row.awaySchoolId)])
+    const when = new Date(next.kickoffAt).toLocaleString()
+    if (refereeChanged && next.refereeEmail) {
+      queueNotification(next.refereeEmail, 'Referee appointment', `You have been appointed to referee ${homeName} vs ${awayName} (${next.ageGroup}) on ${when}${next.venue ? ` at ${next.venue}` : ''}.`)
+    }
+    if (next.status !== row.status && (next.status === 'cancelled' || next.status === 'postponed')) {
+      notifyFixtureParties(next, `Fixture ${next.status}`, `${next.ageGroup}: ${homeName} vs ${awayName} (${when}) has been ${next.status}.`)
+    }
+    res.json(fixtureOut({ ...next, data: JSON.stringify(d) }))
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
+
+// ===========================================================================
 // Scoped messaging — communication follows the reporting hierarchy. Each role
 // may only message its direct superior(s) and direct report(s):
 //   EPHSRUAdmin     <-> ZoneCoordinators (all zones)

@@ -27,6 +27,7 @@ import SeasonFilter from '../components/SeasonFilter'
 import Messages from '../components/Messages'
 import MyPhoto from '../components/MyPhoto'
 import MyProfile from '../components/MyProfile'
+import FixturesPanel from '../components/FixturesPanel'
 import ShowMoreButton from '../components/ShowMoreButton'
 import { currentSeasonYear, filterBySeason, seasonsPresent, archivedCount, seasonYearOf } from '../utils/season'
 import { schoolNameOf, zoneNameOf } from '../utils/labels'
@@ -383,6 +384,8 @@ function PlayerView({ players }: { players: any[] }) {
   return (
     <div className="space-y-6" data-testid="player-self-panel">
       {loading && <div className="text-sm text-gray-600">Loading player data...</div>}
+      {/* When and where do we play? Hidden automatically when nothing is scheduled */}
+      <FixturesPanel compact />
       
       {/* Profile Header Card */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-700 via-blue-600 to-blue-500 text-white shadow-xl">
@@ -1408,6 +1411,9 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
           </div>
         </div>
       </div>
+
+      {/* Upcoming matches (hidden automatically when none are scheduled) */}
+      <div className="mb-6"><FixturesPanel compact /></div>
 
       {bannerMsg && (
         <div className="mb-6 rounded-md bg-blue-50 p-4 border border-blue-100 text-sm text-blue-800 flex items-center justify-between">
@@ -3342,6 +3348,9 @@ function RefereeDashboard({ referees }: { referees: any[] }) {
           </div>
         </div>
       </div>
+
+      {/* My Matches: the referee's assignments and zone fixtures */}
+      <FixturesPanel />
 
       <div>
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">

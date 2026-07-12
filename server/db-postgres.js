@@ -76,6 +76,15 @@ const KEY_MAP = {
   fromrole: 'fromRole',
   fromname: 'fromName',
   toemail: 'toEmail',
+  homeschoolid: 'homeSchoolId',
+  awayschoolid: 'awaySchoolId',
+  kickoffat: 'kickoffAt',
+  refereeemail: 'refereeEmail',
+  homescore: 'homeScore',
+  awayscore: 'awayScore',
+  fixtureid: 'fixtureId',
+  submittedby: 'submittedBy',
+  submittedat: 'submittedAt',
 }
 
 function remapRow(row) {
@@ -184,6 +193,16 @@ async function initSchema() {
     `CREATE TABLE IF NOT EXISTS documents (
       id TEXT PRIMARY KEY, ownerType TEXT NOT NULL, ownerId TEXT NOT NULL,
       fileName TEXT NOT NULL, fileUrl TEXT NOT NULL, status TEXT DEFAULT 'pending', ts BIGINT)`,
+    `CREATE TABLE IF NOT EXISTS fixtures (
+      id TEXT PRIMARY KEY, zoneId TEXT NOT NULL, homeSchoolId TEXT NOT NULL, awaySchoolId TEXT NOT NULL,
+      ageGroup TEXT NOT NULL, kickoffAt BIGINT NOT NULL, venue TEXT, refereeEmail TEXT,
+      status TEXT DEFAULT 'scheduled', homeScore INTEGER, awayScore INTEGER, data TEXT, ts BIGINT)`,
+    `CREATE INDEX IF NOT EXISTS ix_fixtures_zone_kick ON fixtures(zoneId, kickoffAt)`,
+    `CREATE INDEX IF NOT EXISTS ix_fixtures_ref ON fixtures(refereeEmail, kickoffAt)`,
+    `CREATE TABLE IF NOT EXISTS team_sheets (
+      id TEXT PRIMARY KEY, fixtureId TEXT NOT NULL, schoolId TEXT NOT NULL,
+      submittedBy TEXT, submittedAt BIGINT, data TEXT)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_team_sheets_fixture_school ON team_sheets(fixtureId, schoolId)`,
     `CREATE TABLE IF NOT EXISTS approvals (
       id TEXT PRIMARY KEY, entityType TEXT NOT NULL, entityId TEXT NOT NULL,
       requesterId TEXT NOT NULL, approverId TEXT, status TEXT DEFAULT 'pending',

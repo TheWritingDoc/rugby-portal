@@ -270,6 +270,38 @@ db.serialize(() => {
     )
   `)
   
+  // Match-day: fixtures (with folded-in referee report) and team sheets
+  db.run(`
+    CREATE TABLE IF NOT EXISTS fixtures (
+      id TEXT PRIMARY KEY,
+      zoneId TEXT NOT NULL,
+      homeSchoolId TEXT NOT NULL,
+      awaySchoolId TEXT NOT NULL,
+      ageGroup TEXT NOT NULL,
+      kickoffAt INTEGER NOT NULL,
+      venue TEXT,
+      refereeEmail TEXT,
+      status TEXT DEFAULT 'scheduled',
+      homeScore INTEGER,
+      awayScore INTEGER,
+      data TEXT,
+      ts INTEGER
+    )
+  `)
+  try { db.run('CREATE INDEX IF NOT EXISTS ix_fixtures_zone_kick ON fixtures(zoneId, kickoffAt)') } catch {}
+  try { db.run('CREATE INDEX IF NOT EXISTS ix_fixtures_ref ON fixtures(refereeEmail, kickoffAt)') } catch {}
+  db.run(`
+    CREATE TABLE IF NOT EXISTS team_sheets (
+      id TEXT PRIMARY KEY,
+      fixtureId TEXT NOT NULL,
+      schoolId TEXT NOT NULL,
+      submittedBy TEXT,
+      submittedAt INTEGER,
+      data TEXT
+    )
+  `)
+  try { db.run('CREATE UNIQUE INDEX IF NOT EXISTS ux_team_sheets_fixture_school ON team_sheets(fixtureId, schoolId)') } catch {}
+
   // Approvals table for player/coach profile updates
   db.run(`
     CREATE TABLE IF NOT EXISTS approvals (

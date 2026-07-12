@@ -18,6 +18,7 @@ import { zoneNameOf } from '../../utils/labels'
 import PlayerProfileModal from '../modals/PlayerProfileModal'
 import StaffProfileModal from '../modals/StaffProfileModal'
 import SchoolPeopleBrowser from '../SchoolPeopleBrowser'
+import FixturesPanel from '../FixturesPanel'
 import ShowMoreButton from '../ShowMoreButton'
 
 interface ZoneCoordinatorDashboardProps {
@@ -39,7 +40,7 @@ export default function ZoneCoordinatorDashboard({
   admins = [],
   onRefresh
 }: ZoneCoordinatorDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'schools' | 'referees' | 'requests'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'schools' | 'referees' | 'fixtures' | 'requests'>('overview')
   const [searchQuery, setSearchQuery] = useState('')
   const [showAddReferee, setShowAddReferee] = useState(false)
   const [selectedSchool, setSelectedSchool] = useState<any | null>(null)
@@ -330,6 +331,7 @@ export default function ZoneCoordinatorDashboard({
             { id: 'overview', label: 'Overview', icon: Activity },
             { id: 'schools', label: 'Schools', icon: School },
             { id: 'referees', label: 'Referees', icon: Shield },
+            { id: 'fixtures', label: 'Fixtures', icon: Activity },
             { id: 'requests', label: 'Requests', icon: FileText },
           ].map((tab) => (
             <button
@@ -607,6 +609,8 @@ export default function ZoneCoordinatorDashboard({
         )}
 
         {/* REQUESTS TAB */}
+        {activeTab === 'fixtures' && <FixturesPanel manage />}
+
         {activeTab === 'requests' && (
           <div className="space-y-6">
             <h3 className="text-lg font-semibold">Rejected Requests ({rejectedRequests.length})</h3>
