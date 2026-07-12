@@ -21,6 +21,8 @@ playwright-report*
 allure-results
 *.png
 *.jpg
+# ...but app assets in public/ must deploy (manifest icon / favicon / header logo)
+!public/*.png
 *.spec.ts
 playwright.config*.ts
 global-setup.ts
