@@ -2990,6 +2990,74 @@ app.put('/api/fixtures/:id', async (req, res) => {
   }
 })
 
+// Phase 2: a school's team sheet for a fixture. Coaches/school admins of the
+// competing schools upsert their own sheet until kickoff; every listed player
+// must belong to that school, be approved, and match the fixture's age group.
+app.post('/api/fixtures/:id/team-sheet', async (req, res) => {
+  const user = req.user || {}
+  if (!(user.role === 'Coach' || user.role === 'SchoolAdmin')) return res.status(403).json({ error: 'forbidden' })
+  const sid = String(user.schoolId || '')
+  if (!sid) return res.status(403).json({ error: 'forbidden' })
+  try {
+    const f = await dbGetP('SELECT * FROM fixtures WHERE id = ?', [String(req.params.id)])
+    if (!f) return res.status(404).json({ error: 'not_found' })
+    if (String(f.homeSchoolId) !== sid && String(f.awaySchoolId) !== sid) return res.status(403).json({ error: 'not_your_fixture' })
+    if (String(f.status) !== 'scheduled') return res.status(400).json({ error: 'fixture_not_open' })
+    if (Date.now() >= Number(f.kickoffAt || 0)) return res.status(400).json({ error: 'sheet_locked' })
+
+    const players = Array.isArray(req.body?.players) ? req.body.players : []
+    if (players.length === 0 || players.length > 30) return res.status(400).json({ error: 'players_1_to_30' })
+    const ids = players.map((p) => String(p?.playerId || '')).filter(Boolean)
+    if (new Set(ids).size !== players.length) return res.status(400).json({ error: 'duplicate_players' })
+    if (players.filter((p) => p?.captain === true).length > 1) return res.status(400).json({ error: 'one_captain_only' })
+
+    const rows = await dbAllP(`SELECT id, schoolId, data FROM players WHERE id IN (${ids.map(() => '?').join(',')})`, ids)
+    const byId = new Map(rows.map((r) => [String(r.id), r]))
+    for (const id of ids) {
+      const r = byId.get(id)
+      if (!r || String(r.schoolId) !== sid) return res.status(400).json({ error: 'player_not_in_school', playerId: id })
+      let d = {}
+      try { d = JSON.parse(r.data || '{}') } catch {}
+      const st = String(d.status || 'approved')
+      if (st === 'pending' || st === 'rejected') return res.status(400).json({ error: 'player_not_approved', playerId: id })
+      if (String(d.ageGroup || '') !== String(f.ageGroup) && String(d.team || '') !== String(f.ageGroup)) {
+        return res.status(400).json({ error: 'player_wrong_age_group', playerId: id })
+      }
+    }
+
+    const clean = players.map((p) => ({
+      playerId: String(p.playerId),
+      jersey: String(p.jersey ?? '').slice(0, 3),
+      position: String(p.position || '').slice(0, 40),
+      captain: p.captain === true,
+    }))
+    const data = JSON.stringify({ players: clean })
+    const now = Date.now()
+    const upd = await dbRunP(
+      'UPDATE team_sheets SET data = ?, submittedBy = ?, submittedAt = ? WHERE fixtureId = ? AND schoolId = ?',
+      [data, String(user.email || ''), now, f.id, sid]
+    )
+    if (!upd.changes) {
+      await dbRunP(
+        'INSERT INTO team_sheets (id, fixtureId, schoolId, submittedBy, submittedAt, data) VALUES (?, ?, ?, ?, ?, ?)',
+        [crypto.randomUUID(), f.id, sid, String(user.email || ''), now, data]
+      )
+    }
+    writeAudit(user.role, 'team_sheets', upd.changes ? 'update' : 'create', null, { fixtureId: f.id, schoolId: sid, players: clean.length })
+    if (f.refereeEmail) {
+      const name = await schoolDisplay(sid)
+      queueNotification(
+        f.refereeEmail,
+        'Team sheet submitted',
+        `${name} submitted their ${f.ageGroup} team sheet (${clean.length} players) for the fixture on ${new Date(Number(f.kickoffAt)).toLocaleString()}.`
+      )
+    }
+    res.json({ ok: true, fixtureId: f.id, schoolId: sid, players: clean.length })
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
+
 // ===========================================================================
 // Scoped messaging — communication follows the reporting hierarchy. Each role
 // may only message its direct superior(s) and direct report(s):

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, MapPin, Flag, Plus, X, Loader2, Shield } from 'lucide-react'
+import { CalendarDays, MapPin, Flag, Plus, X, Loader2, Shield, ClipboardList, Printer } from 'lucide-react'
+import QRCode from 'qrcode'
 import { apiUrl } from '../utils/apiBase'
 import { getToken } from '../utils/auth'
 import { fetchList, getJsonPath, postJsonPath } from '../utils/api'
@@ -57,6 +58,8 @@ export default function FixturesPanel({ manage = false, compact = false }: { man
   const zoneId = localStorage.getItem('auth:zoneId') || ''
   const mySchool = localStorage.getItem('auth:schoolId') || ''
   const myEmail = (localStorage.getItem('auth:email') || '').toLowerCase()
+  const myRole = localStorage.getItem('auth:role') || ''
+  const [sheetFor, setSheetFor] = useState<string | null>(null)
 
   const [form, setForm] = useState({ homeSchoolId: '', awaySchoolId: '', ageGroup: 'U16', date: '', time: '14:00', venue: '', refereeEmail: '' })
 
@@ -148,6 +151,20 @@ export default function FixturesPanel({ manage = false, compact = false }: { man
             {f.status}
           </span>
         </div>
+        {/* Coach / school admin of a competing school builds their team sheet here */}
+        {(myRole === 'Coach' || myRole === 'SchoolAdmin') && mine && f.status === 'scheduled' && Date.now() < Number(f.kickoffAt) && (
+          <div className="mt-3 border-t border-gray-100 pt-3">
+            <button
+              type="button"
+              onClick={() => setSheetFor(sheetFor === f.id ? null : f.id)}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${sheetFor === f.id ? 'border border-gray-300 text-gray-600 hover:bg-gray-50' : 'bg-brand text-white hover:brightness-110'}`}
+            >
+              <ClipboardList className="h-3.5 w-3.5" />
+              {sheetFor === f.id ? 'Close team sheet' : 'Team sheet'}
+            </button>
+            {sheetFor === f.id && <TeamSheetBuilder fixture={f} mySchool={mySchool} onSaved={load} />}
+          </div>
+        )}
         {manage && f.status === 'scheduled' && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
             <select
@@ -261,6 +278,204 @@ export default function FixturesPanel({ manage = false, compact = false }: { man
               <ShowMoreButton total={past.length} shown={showPast} onMore={() => setShowPast((n) => n + 12)} />
             </div>
           )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Team-sheet builder (Phase 2). The coach picks from their approved roster of
+// the fixture's age group, numbers the jerseys, marks a captain, and can
+// re-submit until kickoff. Printing produces a referee-ready A4 sheet with a
+// QR per player (same verify pipeline as the match-day ID cards).
+// ---------------------------------------------------------------------------
+type SheetEntry = { jersey: string; captain: boolean }
+
+function TeamSheetBuilder({ fixture, mySchool, onSaved }: { fixture: Fixture; mySchool: string; onSaved: () => void }) {
+  const [roster, setRoster] = useState<any[]>([])
+  const [picked, setPicked] = useState<Map<string, SheetEntry>>(new Map())
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [submittedAt, setSubmittedAt] = useState<number | null>(null)
+  const [shown, setShown] = useState(24)
+  const zoneId = localStorage.getItem('auth:zoneId') || ''
+
+  useEffect(() => {
+    ;(async () => {
+      setLoading(true)
+      try {
+        const [players, detail] = await Promise.all([
+          fetchList('players', { zoneId, schoolId: mySchool }),
+          getJsonPath(`fixtures/${encodeURIComponent(fixture.id)}`),
+        ])
+        const eligible = (Array.isArray(players) ? players : []).filter((p: any) => {
+          const d = p.data || {}
+          const st = String(d.status || 'approved')
+          if (st === 'pending' || st === 'rejected') return false
+          return String(d.ageGroup || '') === fixture.ageGroup || String(d.team || '') === fixture.ageGroup
+        })
+        setRoster(eligible)
+        const own = (detail as any)?.teamSheets?.find((s: any) => String(s.schoolId) === mySchool)
+        if (own) {
+          setSubmittedAt(Number(own.submittedAt) || null)
+          const m = new Map<string, SheetEntry>()
+          for (const pl of own.players || []) m.set(String(pl.playerId), { jersey: String(pl.jersey || ''), captain: pl.captain === true })
+          setPicked(m)
+        }
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [fixture.id, mySchool, zoneId, fixture.ageGroup])
+
+  const toggle = (id: string) => setPicked((prev) => {
+    const next = new Map(prev)
+    if (next.has(id)) next.delete(id)
+    else next.set(id, { jersey: String(next.size + 1), captain: false })
+    return next
+  })
+  const setJersey = (id: string, jersey: string) => setPicked((prev) => {
+    const next = new Map(prev)
+    const e = next.get(id); if (e) next.set(id, { ...e, jersey: jersey.replace(/\D/g, '').slice(0, 2) })
+    return next
+  })
+  const setCaptain = (id: string) => setPicked((prev) => {
+    const next = new Map<string, SheetEntry>()
+    for (const [k, v] of prev) next.set(k, { ...v, captain: k === id })
+    return next
+  })
+
+  async function save() {
+    if (picked.size === 0) return notifyError('Select at least one player')
+    if (picked.size > 30) return notifyError('A team sheet holds at most 30 players')
+    setSaving(true)
+    try {
+      const players = [...picked.entries()].map(([playerId, e]) => {
+        const row = roster.find((p) => String(p.id) === playerId)
+        return { playerId, jersey: e.jersey, position: String(row?.data?.position || ''), captain: e.captain }
+      })
+      const res = await postJsonPath(`fixtures/${encodeURIComponent(fixture.id)}/team-sheet`, { players })
+      if (!res.ok) throw new Error((res.data as any)?.error || 'save failed')
+      setSubmittedAt(Date.now())
+      notifySuccess(`Team sheet submitted — ${players.length} players. You can edit it until kickoff.`)
+      onSaved()
+    } catch (e: any) {
+      notifyError(`Could not submit the team sheet: ${e?.message || e}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function printSheet() {
+    const chosen = [...picked.entries()].map(([playerId, e]) => ({ e, row: roster.find((p) => String(p.id) === playerId) })).filter((x) => x.row)
+    if (chosen.length === 0) return notifyError('Select players first')
+    // Signed verify URLs (same pipeline as the printed ID cards); print works without them
+    const urlById = new Map<string, string>()
+    try {
+      const res = await postJsonPath('verify-tokens', { items: chosen.map((c) => ({ type: 'players', id: String(c.row.id) })) })
+      for (const t of (res as any)?.data?.tokens || []) if (t?.id && t?.url) urlById.set(String(t.id), String(t.url))
+    } catch {}
+    const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const rows = await Promise.all(chosen
+      .sort((a, b) => Number(a.e.jersey || 99) - Number(b.e.jersey || 99))
+      .map(async ({ e, row }) => {
+        const d = row.data || {}
+        const payload = [
+          'EPHSRU TEAM SHEET', `${d.name || ''} ${d.surname || ''}`.trim(),
+          d.idNumber ? `ID: ${d.idNumber}` : '', `${fixture.ageGroup} #${e.jersey}`,
+          urlById.get(String(row.id)) ? `Verify: ${urlById.get(String(row.id))}` : '',
+        ].filter(Boolean).join('\n')
+        const qr = await QRCode.toDataURL(payload, { margin: 0, width: 96, errorCorrectionLevel: 'M' }).catch(() => '')
+        return `<tr>
+          <td class="j">${esc(e.jersey)}${e.captain ? ' <b>(C)</b>' : ''}</td>
+          <td>${esc(d.name)} ${esc(d.surname)}</td>
+          <td>${esc(d.position || '')}</td>
+          <td>${esc(d.idNumber || '')}</td>
+          <td class="q">${qr ? `<img src="${qr}" width="52" height="52"/>` : ''}</td>
+        </tr>`
+      }))
+    const when = new Date(fixture.kickoffAt).toLocaleString()
+    const html = `<!doctype html><html><head><title>Team Sheet</title><style>
+      body{font-family:Segoe UI,Arial,sans-serif;margin:24px;color:#111}
+      h1{font-size:18px;margin:0} .sub{color:#555;font-size:12px;margin:4px 0 16px}
+      table{width:100%;border-collapse:collapse;font-size:13px}
+      th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:left}
+      th{background:#f1f5f9;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+      .j{width:52px;font-weight:700}.q{width:60px;text-align:center}
+      .sig{margin-top:28px;display:flex;gap:40px;font-size:12px}
+      .sig div{flex:1;border-top:1px solid #111;padding-top:4px}
+      @media print {.noprint{display:none}}
+    </style></head><body>
+      <h1>TEAM SHEET — ${esc(schoolNameOf(mySchool))}</h1>
+      <div class="sub">${esc(schoolNameOf(fixture.homeSchoolId))} vs ${esc(schoolNameOf(fixture.awaySchoolId))} · ${esc(fixture.ageGroup)} · ${esc(when)}${fixture.venue ? ` · ${esc(fixture.venue)}` : ''}${fixture.refereeEmail ? ` · Referee: ${esc(fixture.refereeEmail)}` : ''}</div>
+      <table><thead><tr><th>#</th><th>Player</th><th>Position</th><th>ID / Passport</th><th>Verify</th></tr></thead>
+      <tbody>${rows.join('')}</tbody></table>
+      <div class="sig"><div>Coach signature</div><div>Referee signature</div></div>
+      <script>window.onload=()=>setTimeout(()=>window.print(),300)</script>
+    </body></html>`
+    const w = window.open('', '_blank', 'width=900,height=700')
+    if (!w) return notifyError('Allow pop-ups to print the team sheet')
+    w.document.write(html); w.document.close()
+  }
+
+  if (loading) {
+    return <div className="mt-3 flex items-center gap-2 rounded-lg border bg-gray-50 px-4 py-3 text-xs text-gray-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading roster…</div>
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50/60 p-3" data-testid="team-sheet-builder">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span className="font-semibold text-gray-700">
+          {picked.size} selected · {fixture.ageGroup} roster ({roster.length} eligible)
+          {submittedAt ? <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-700 ring-1 ring-emerald-300">Submitted ✓ — editable until kickoff</span> : null}
+        </span>
+        <div className="flex gap-2">
+          <button type="button" onClick={printSheet} className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 font-medium text-gray-600 hover:bg-gray-50">
+            <Printer className="h-3.5 w-3.5" /> Print
+          </button>
+          <button type="button" onClick={save} disabled={saving} className="inline-flex items-center gap-1 rounded-md bg-brand px-3 py-1.5 font-semibold text-white hover:brightness-110 disabled:opacity-60">
+            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {submittedAt ? 'Update sheet' : 'Submit sheet'}
+          </button>
+        </div>
+      </div>
+      {roster.length === 0 ? (
+        <div className="rounded-md border border-dashed border-gray-300 bg-white px-3 py-4 text-center text-xs text-gray-500">
+          No approved {fixture.ageGroup} players found for your school.
+        </div>
+      ) : (
+        <>
+          <div className="divide-y divide-gray-100 rounded-md border border-gray-200 bg-white">
+            {roster.slice(0, shown).map((p) => {
+              const d = p.data || {}
+              const id = String(p.id)
+              const entry = picked.get(id)
+              return (
+                <label key={id} className={`flex items-center gap-3 px-3 py-2 text-sm ${entry ? 'bg-brand/5' : ''}`}>
+                  <input type="checkbox" checked={!!entry} onChange={() => toggle(id)} aria-label={`Select ${d.name} ${d.surname}`} />
+                  <span className="min-w-0 flex-1 truncate">{d.name} {d.surname} <span className="text-xs text-gray-400">{d.position || ''}</span></span>
+                  {entry && (
+                    <>
+                      <input
+                        value={entry.jersey}
+                        onChange={(e) => setJersey(id, e.target.value)}
+                        aria-label={`Jersey number for ${d.name} ${d.surname}`}
+                        className="w-12 rounded-md border border-gray-300 px-1.5 py-1 text-center text-xs"
+                        placeholder="#"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setCaptain(id)}
+                        title="Captain"
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${entry.captain ? 'bg-amber-100 text-amber-700 ring-amber-300' : 'bg-gray-100 text-gray-400 ring-gray-200 hover:text-gray-600'}`}
+                      >C</button>
+                    </>
+                  )}
+                </label>
+              )
+            })}
+          </div>
+          <ShowMoreButton total={roster.length} shown={shown} onMore={() => setShown((n) => n + 24)} className="mt-2" />
         </>
       )}
     </div>
