@@ -9,6 +9,12 @@
 // user "resend", pass = your API key) — see DEPLOY-SUPABASE-VERCEL.md.
 import nodemailer from 'nodemailer'
 
+// On Vercel the lambda freezes the moment the HTTP response is sent, killing
+// any in-flight SMTP handshake. waitUntil() keeps the instance alive until the
+// send settles without delaying the response. Optional import: absent locally.
+let waitUntil = null
+try { ({ waitUntil } = await import('@vercel/functions')) } catch {}
+
 const HOST = process.env.SMTP_HOST || ''
 const PORT = Number(process.env.SMTP_PORT || 587)
 const USER = process.env.SMTP_USER || ''
@@ -55,8 +61,9 @@ export function sendMail(to, subject, text) {
   const recipient = String(to || '').trim()
   if (!recipient) return
   if (!mailEnabled) return
-  transporter
+  const send = transporter
     .sendMail({ from: FROM, to: recipient, subject: String(subject || ''), text: String(text || ''), html: htmlWrap(subject, text) })
     .then(() => console.log(`[mail] sent "${subject}" -> ${recipient}`))
     .catch((err) => console.error(`[mail] FAILED "${subject}" -> ${recipient}: ${err?.message || err}`))
+  try { if (waitUntil) waitUntil(send) } catch {}
 }
