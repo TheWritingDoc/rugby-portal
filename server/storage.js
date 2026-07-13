@@ -4,26 +4,20 @@
 // uploads can't live on local disk in production. When Supabase Storage is
 // configured we push the bytes there and return a public URL; otherwise we fall
 // back to writing under server/uploads for local development.
+//
+// Uploads use the Storage REST API directly instead of @supabase/supabase-js:
+// the SDK initializes Realtime, which crashes on Node 20 serverless (no native
+// WebSocket) — and storage only needs one authenticated PUT anyway.
 import fs from 'fs'
 import path from 'path'
 
-const SUPABASE_URL = process.env.SUPABASE_URL
+const SUPABASE_URL = String(process.env.SUPABASE_URL || '').replace(/\/$/, '')
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 const BUCKET = process.env.SUPABASE_BUCKET || 'uploads'
 
 export const usingSupabaseStorage = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
 
 const localDir = path.join(process.cwd(), 'server', 'uploads')
-
-let _client = null
-async function supabase() {
-  if (_client) return _client
-  const { createClient } = await import('@supabase/supabase-js')
-  _client = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
-  })
-  return _client
-}
 
 function safeName(originalName) {
   const cleaned = String(originalName || 'file').replace(/[^a-zA-Z0-9_.-]/g, '_')
@@ -36,14 +30,21 @@ function safeName(originalName) {
 export async function saveUpload(buffer, originalName, mimetype) {
   const name = safeName(originalName)
   if (usingSupabaseStorage) {
-    const client = await supabase()
-    const { error } = await client.storage.from(BUCKET).upload(name, buffer, {
-      contentType: mimetype || 'application/octet-stream',
-      upsert: false,
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        'Content-Type': mimetype || 'application/octet-stream',
+        'x-upsert': 'false',
+      },
+      body: buffer,
     })
-    if (error) throw error
-    const { data } = client.storage.from(BUCKET).getPublicUrl(name)
-    return data.publicUrl
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`storage upload failed (${res.status}): ${detail.slice(0, 200)}`)
+    }
+    return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${name}`
   }
   if (!fs.existsSync(localDir)) fs.mkdirSync(localDir, { recursive: true })
   fs.writeFileSync(path.join(localDir, name), buffer)
