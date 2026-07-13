@@ -797,6 +797,17 @@ function CoachView({ role, players, onRefresh }: { role: Role; players: any[]; o
       }
     })()
   }, [zoneId, schoolId])
+
+  // The header banner shows the coach's own photo — update it live when they
+  // change it via the MyPhoto control (same page, no reload).
+  useEffect(() => {
+    const h = (e: any) => {
+      const url = String(e?.detail?.url || '')
+      if (url) setCoachSelf((prev: any) => prev ? { ...prev, data: { ...(prev.data || {}), photoUrl: url } } : prev)
+    }
+    window.addEventListener('me:photo:updated', h as any)
+    return () => window.removeEventListener('me:photo:updated', h as any)
+  }, [])
   
   async function loadPending() {
     if (loadingPendingGuard.current) return
