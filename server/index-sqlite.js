@@ -1729,6 +1729,17 @@ app.get('/api/assistant/fixtures', async (req, res) => {
        ORDER BY kickoffAt ASC LIMIT 50`,
       [email]
     )
+    // Sheet status per school in one sweep — powers the assistant's
+    // "sheet submitted ✓" chips without shipping full sheets on the list.
+    const submitted = new Set()
+    if (rows.length > 0) {
+      const ids = rows.map((f) => String(f.id))
+      const sheetRows = await dbAllP(
+        `SELECT fixtureId, schoolId FROM team_sheets WHERE fixtureId IN (${ids.map(() => '?').join(',')})`,
+        ids
+      )
+      for (const s of sheetRows) submitted.add(`${s.fixtureId}|${s.schoolId}`)
+    }
     const fixtures = []
     for (const f of rows) {
       if (onlyFixtureId && String(f.id) !== onlyFixtureId) continue
@@ -1748,6 +1759,10 @@ app.get('/api/assistant/fixtures', async (req, res) => {
         awaySchool,
         homeScore: f.homeScore ?? null,
         awayScore: f.awayScore ?? null,
+        sheetSubmitted: {
+          home: submitted.has(`${f.id}|${f.homeSchoolId}`),
+          away: submitted.has(`${f.id}|${f.awaySchoolId}`),
+        },
       }
       // Sheets are only attached on the single-fixture fetch (the link flow) —
       // the list view doesn't need the extra queries.
