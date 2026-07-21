@@ -1671,14 +1671,63 @@ app.get('/api/verify/:token', cors(), (req, res) => {
 // ---------------------------------------------------------------------------
 const ASSISTANT_API_KEY = process.env.ASSISTANT_API_KEY || ''
 app.use('/api/assistant/', rateLimit(isProd ? 60 : 1000, 60_000))
-app.post('/api/assistant/archive', async (req, res) => {
-  if (!ASSISTANT_API_KEY) return res.status(503).json({ error: 'not_configured' })
+
+function assistantAuthorized(req, res) {
+  if (!ASSISTANT_API_KEY) {
+    res.status(503).json({ error: 'not_configured' })
+    return false
+  }
   const auth = String(req.headers.authorization || '')
   const given = Buffer.from(auth.startsWith('Bearer ') ? auth.slice(7) : '')
   const expected = Buffer.from(ASSISTANT_API_KEY)
   if (!given.length || given.length !== expected.length || !timingSafeEqual(expected, given)) {
-    return res.status(401).json({ error: 'unauthorized' })
+    res.status(401).json({ error: 'unauthorized' })
+    return false
   }
+  return true
+}
+
+// Referee's fixture assignments, keyed by email (identity rule shared with
+// messaging/matchday). Consumed by the Assistant's portal-fixtures Edge
+// Function so the referee can spin up a linked live game from an appointment.
+app.get('/api/assistant/fixtures', async (req, res) => {
+  if (!assistantAuthorized(req, res)) return
+  const email = String(req.query.refereeEmail || '').trim().toLowerCase()
+  if (!email) return res.status(400).json({ error: 'referee_email_required' })
+  try {
+    const rows = await dbAllP(
+      `SELECT * FROM fixtures WHERE LOWER(COALESCE(refereeEmail, '')) = ? AND status != 'cancelled'
+       ORDER BY kickoffAt ASC LIMIT 50`,
+      [email]
+    )
+    const fixtures = []
+    for (const f of rows) {
+      const [homeSchool, awaySchool] = await Promise.all([
+        schoolDisplay(f.homeSchoolId),
+        schoolDisplay(f.awaySchoolId),
+      ])
+      fixtures.push({
+        id: f.id,
+        ageGroup: f.ageGroup,
+        kickoffAt: Number(f.kickoffAt),
+        venue: f.venue || null,
+        status: f.status,
+        homeSchoolId: f.homeSchoolId,
+        awaySchoolId: f.awaySchoolId,
+        homeSchool,
+        awaySchool,
+        homeScore: f.homeScore ?? null,
+        awayScore: f.awayScore ?? null,
+      })
+    }
+    res.json({ fixtures })
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
+
+app.post('/api/assistant/archive', async (req, res) => {
+  if (!assistantAuthorized(req, res)) return
   const body = req.body || {}
   const jobId = String(body.jobId || '')
   const gameId = String(body.gameId || '')
@@ -1691,7 +1740,44 @@ app.post('/api/assistant/archive', async (req, res) => {
       [jobId, gameId, String(body.jobType || 'PORTAL_ARCHIVE'), JSON.stringify(body.payload ?? {}), ts]
     )
     writeAudit('AssistantApp', 'assistant_archives', 'ingest', null, { jobId, gameId, jobType: body.jobType })
-    res.json({ ok: true })
+
+    // Linked fixture? Auto-file the result (one-shot like the referee form —
+    // an already-completed fixture is never overwritten; ZC override stands).
+    let fixtureFiled = false
+    const payload = body.payload || {}
+    const fixtureId = String(payload?.game?.portalGameId || '')
+    const finalScore = payload?.finalScore
+    if (fixtureId && finalScore && Number.isFinite(Number(finalScore.home)) && Number.isFinite(Number(finalScore.away))) {
+      const f = await dbGetP('SELECT * FROM fixtures WHERE id = ? LIMIT 1', [fixtureId])
+      if (f && f.status !== 'completed') {
+        let d = {}
+        try { d = JSON.parse(f.data || '{}') } catch {}
+        d.report = {
+          filedBy: 'AssistantApp',
+          filedAt: ts,
+          assistantGameId: gameId,
+          notes: 'Result filed automatically from the Rugby Assistant match archive.',
+        }
+        await dbRunP(
+          `UPDATE fixtures SET homeScore = ?, awayScore = ?, status = 'completed', data = ?, ts = ? WHERE id = ?`,
+          [Number(finalScore.home), Number(finalScore.away), JSON.stringify(d), ts, fixtureId]
+        )
+        writeAudit('AssistantApp', 'fixtures', 'result', null, {
+          id: fixtureId, homeScore: Number(finalScore.home), awayScore: Number(finalScore.away), source: 'assistant_archive', jobId,
+        })
+        const [homeName, awayName] = await Promise.all([
+          schoolDisplay(f.homeSchoolId),
+          schoolDisplay(f.awaySchoolId),
+        ])
+        notifyFixtureParties(
+          f,
+          'Match result filed',
+          `${f.ageGroup}: ${homeName} ${Number(finalScore.home)}–${Number(finalScore.away)} ${awayName} (filed from the match-day app).`
+        )
+        fixtureFiled = true
+      }
+    }
+    res.json({ ok: true, fixtureFiled })
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) })
   }
