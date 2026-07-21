@@ -1690,10 +1690,39 @@ function assistantAuthorized(req, res) {
 // Referee's fixture assignments, keyed by email (identity rule shared with
 // messaging/matchday). Consumed by the Assistant's portal-fixtures Edge
 // Function so the referee can spin up a linked live game from an appointment.
+// A fixture's submitted team sheets with player names resolved — the shape the
+// Assistant needs to build real (named) squads instead of numbered placeholders.
+async function fixtureTeamSheets(fixtureId) {
+  const sheets = await dbAllP('SELECT * FROM team_sheets WHERE fixtureId = ?', [String(fixtureId)])
+  const out = {}
+  for (const s of sheets) {
+    let entries = []
+    try { entries = JSON.parse(s.data || '{}').players || [] } catch {}
+    const ids = entries.map((p) => String(p?.playerId || '')).filter(Boolean)
+    const nameById = new Map()
+    if (ids.length > 0) {
+      const rows = await dbAllP(`SELECT id, name, surname FROM players WHERE id IN (${ids.map(() => '?').join(',')})`, ids)
+      for (const r of rows) nameById.set(String(r.id), `${r.name || ''} ${r.surname || ''}`.trim())
+    }
+    out[String(s.schoolId)] = {
+      submittedAt: s.submittedAt ? Number(s.submittedAt) : null,
+      players: entries.map((p) => ({
+        playerId: String(p.playerId || ''),
+        jersey: String(p.jersey ?? ''),
+        position: String(p.position || ''),
+        captain: p.captain === true,
+        fullName: nameById.get(String(p.playerId || '')) || null,
+      })),
+    }
+  }
+  return out
+}
+
 app.get('/api/assistant/fixtures', async (req, res) => {
   if (!assistantAuthorized(req, res)) return
   const email = String(req.query.refereeEmail || '').trim().toLowerCase()
   if (!email) return res.status(400).json({ error: 'referee_email_required' })
+  const onlyFixtureId = String(req.query.fixtureId || '')
   try {
     const rows = await dbAllP(
       `SELECT * FROM fixtures WHERE LOWER(COALESCE(refereeEmail, '')) = ? AND status != 'cancelled'
@@ -1702,11 +1731,12 @@ app.get('/api/assistant/fixtures', async (req, res) => {
     )
     const fixtures = []
     for (const f of rows) {
+      if (onlyFixtureId && String(f.id) !== onlyFixtureId) continue
       const [homeSchool, awaySchool] = await Promise.all([
         schoolDisplay(f.homeSchoolId),
         schoolDisplay(f.awaySchoolId),
       ])
-      fixtures.push({
+      const fixture = {
         id: f.id,
         ageGroup: f.ageGroup,
         kickoffAt: Number(f.kickoffAt),
@@ -1718,7 +1748,11 @@ app.get('/api/assistant/fixtures', async (req, res) => {
         awaySchool,
         homeScore: f.homeScore ?? null,
         awayScore: f.awayScore ?? null,
-      })
+      }
+      // Sheets are only attached on the single-fixture fetch (the link flow) —
+      // the list view doesn't need the extra queries.
+      if (onlyFixtureId) fixture.teamSheets = await fixtureTeamSheets(f.id)
+      fixtures.push(fixture)
     }
     res.json({ fixtures })
   } catch (e) {
