@@ -316,6 +316,18 @@ db.serialize(() => {
   `)
   try { db.run('CREATE UNIQUE INDEX IF NOT EXISTS ux_team_sheets_fixture_school ON team_sheets(fixtureId, schoolId)') } catch {}
 
+  // Match-archive inbox pushed by the Rugby Assistant app (id = assistant job id)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS assistant_archives (
+      id TEXT PRIMARY KEY,
+      gameId TEXT NOT NULL,
+      jobType TEXT,
+      data TEXT,
+      ts INTEGER
+    )
+  `)
+  try { db.run('CREATE INDEX IF NOT EXISTS ix_assistant_archives_game ON assistant_archives(gameId)') } catch {}
+
   // Approvals table for player/coach profile updates
   db.run(`
     CREATE TABLE IF NOT EXISTS approvals (

@@ -1660,6 +1660,43 @@ app.get('/api/verify/:token', cors(), (req, res) => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Rugby Assistant match-archive delivery (assistant app → portal).
+//
+// The Assistant's process-portal-queue Edge Function POSTs completed-game
+// archives here with a shared Bearer key (ASSISTANT_API_KEY — same value as
+// PORTAL_API_KEY on the Assistant's Supabase project). Idempotent on the
+// Assistant's job id, so its at-least-once retry loop can replay safely.
+// Write-only inbox: nothing here reads back into portal entities.
+// ---------------------------------------------------------------------------
+const ASSISTANT_API_KEY = process.env.ASSISTANT_API_KEY || ''
+app.use('/api/assistant/', rateLimit(isProd ? 60 : 1000, 60_000))
+app.post('/api/assistant/archive', async (req, res) => {
+  if (!ASSISTANT_API_KEY) return res.status(503).json({ error: 'not_configured' })
+  const auth = String(req.headers.authorization || '')
+  const given = Buffer.from(auth.startsWith('Bearer ') ? auth.slice(7) : '')
+  const expected = Buffer.from(ASSISTANT_API_KEY)
+  if (!given.length || given.length !== expected.length || !timingSafeEqual(expected, given)) {
+    return res.status(401).json({ error: 'unauthorized' })
+  }
+  const body = req.body || {}
+  const jobId = String(body.jobId || '')
+  const gameId = String(body.gameId || '')
+  if (!jobId || !gameId) return res.status(400).json({ error: 'job_and_game_required' })
+  const ts = Date.now()
+  try {
+    await dbRunP(
+      `INSERT INTO assistant_archives (id, gameId, jobType, data, ts) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET data = excluded.data, ts = excluded.ts`,
+      [jobId, gameId, String(body.jobType || 'PORTAL_ARCHIVE'), JSON.stringify(body.payload ?? {}), ts]
+    )
+    writeAudit('AssistantApp', 'assistant_archives', 'ingest', null, { jobId, gameId, jobType: body.jobType })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
+
 // Admins endpoints
 app.post('/api/admins', (req, res) => {
   if (!allowPost('admins', req.user?.role)) return res.status(403).json({ error: 'forbidden' })
