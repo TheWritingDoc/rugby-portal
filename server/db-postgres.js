@@ -206,6 +206,7 @@ async function initSchema() {
     `CREATE TABLE IF NOT EXISTS assistant_archives (
       id TEXT PRIMARY KEY, gameId TEXT NOT NULL, jobType TEXT, data TEXT, ts BIGINT)`,
     `CREATE INDEX IF NOT EXISTS ix_assistant_archives_game ON assistant_archives(gameId)`,
+    `ALTER TABLE assistant_archives ENABLE ROW LEVEL SECURITY`,
     `CREATE TABLE IF NOT EXISTS approvals (
       id TEXT PRIMARY KEY, entityType TEXT NOT NULL, entityId TEXT NOT NULL,
       requesterId TEXT NOT NULL, approverId TEXT, status TEXT DEFAULT 'pending',
