@@ -321,12 +321,15 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS assistant_archives (
       id TEXT PRIMARY KEY,
       gameId TEXT NOT NULL,
+      fixtureId TEXT,
       jobType TEXT,
       data TEXT,
       ts INTEGER
     )
   `)
+  try { db.run('ALTER TABLE assistant_archives ADD COLUMN fixtureId TEXT') } catch {}
   try { db.run('CREATE INDEX IF NOT EXISTS ix_assistant_archives_game ON assistant_archives(gameId)') } catch {}
+  try { db.run('CREATE INDEX IF NOT EXISTS ix_assistant_archives_fixture ON assistant_archives(fixtureId)') } catch {}
 
   // Approvals table for player/coach profile updates
   db.run(`

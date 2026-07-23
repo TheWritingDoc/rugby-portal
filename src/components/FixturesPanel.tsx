@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, MapPin, Flag, Plus, X, Loader2, Shield, ClipboardList, Printer } from 'lucide-react'
+import { CalendarDays, MapPin, Flag, Plus, X, Loader2, Shield, ClipboardList, Printer, Zap } from 'lucide-react'
 import QRCode from 'qrcode'
 import { apiUrl } from '../utils/apiBase'
 import { getToken } from '../utils/auth'
@@ -23,6 +23,7 @@ type Fixture = {
   homeScore?: number | null
   awayScore?: number | null
   notes?: string
+  report?: { filedBy?: string } | null
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -61,6 +62,7 @@ export default function FixturesPanel({ manage = false, compact = false }: { man
   const myRole = localStorage.getItem('auth:role') || ''
   const [sheetFor, setSheetFor] = useState<string | null>(null)
   const [resultFor, setResultFor] = useState<string | null>(null)
+  const [archiveFor, setArchiveFor] = useState<string | null>(null)
 
   const [form, setForm] = useState({ homeSchoolId: '', awaySchoolId: '', ageGroup: 'U16', date: '', time: '14:00', venue: '', refereeEmail: '' })
 
@@ -149,6 +151,15 @@ export default function FixturesPanel({ manage = false, compact = false }: { man
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {f.status === 'completed' && f.report?.filedBy === 'AssistantApp' && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-semibold text-purple-700 ring-1 ring-inset ring-purple-200"
+                title="Result filed automatically from the Rugby Assistant match archive"
+                data-testid="assistant-filed-badge"
+              >
+                <Zap className="h-3 w-3" /> match-day app
+              </span>
+            )}
             {f.status === 'completed' && f.homeScore !== null && f.homeScore !== undefined && (
               <span className="rounded-lg bg-gray-900 px-3 py-1 text-sm font-bold text-white" data-testid="fixture-score">
                 {f.homeScore} — {f.awayScore}
@@ -181,6 +192,22 @@ export default function FixturesPanel({ manage = false, compact = false }: { man
             </div>
           )
         })()}
+
+        {/* Full match archive pushed by the Rugby Assistant at full-time */}
+        {f.status === 'completed' && (
+          <div className="mt-3 border-t border-gray-100 pt-3">
+            <button
+              type="button"
+              onClick={() => setArchiveFor(archiveFor === f.id ? null : f.id)}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${archiveFor === f.id ? 'border border-gray-300 text-gray-600 hover:bg-gray-50' : 'border border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100'}`}
+              data-testid="match-details"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              {archiveFor === f.id ? 'Close match details' : 'Match details'}
+            </button>
+            {archiveFor === f.id && <MatchArchive fixture={f} />}
+          </div>
+        )}
 
         {/* Coach / school admin of a competing school builds their team sheet here */}
         {(myRole === 'Coach' || myRole === 'SchoolAdmin') && mine && f.status === 'scheduled' && Date.now() < Number(f.kickoffAt) && (
@@ -666,4 +693,136 @@ function SchoolOptions({ zoneId }: { zoneId: string }) {
     })()
   }, [zoneId])
   return <>{opts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</>
+}
+
+// ---------------------------------------------------------------------------
+// Match archive viewer — the full event stream the Rugby Assistant pushes at
+// full-time. Scoring plays, cards and substitutions on a timeline (player
+// names resolved from the payload's player map); fouls/lineouts summarised.
+// ---------------------------------------------------------------------------
+function MatchArchive({ fixture }: { fixture: Fixture }) {
+  const [loading, setLoading] = useState(true)
+  const [archive, setArchive] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const res = await fetch(apiUrl(`/fixtures/${encodeURIComponent(fixture.id)}/archive`), { headers: authHeaders() })
+        if (res.status === 404) { setError('no_archive'); return }
+        if (!res.ok) throw new Error('archive fetch failed')
+        const body = await res.json()
+        setArchive(body.archive || null)
+      } catch (e: any) {
+        setError(String(e?.message || e))
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [fixture.id])
+
+  if (loading) return <div className="mt-3 flex items-center gap-2 text-xs text-gray-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading match archive…</div>
+  if (error === 'no_archive' || !archive) {
+    return <p className="mt-3 text-xs text-gray-500">No match archive received for this fixture — the result was filed manually, or the match-day app wasn't used.</p>
+  }
+  if (error) return <p className="mt-3 text-xs text-red-600">Couldn't load the archive: {error}</p>
+
+  const players: any[] = Array.isArray(archive.players) ? archive.players : []
+  const playerOf = (id: string | null | undefined) => {
+    const p = players.find((x) => x.id === id)
+    if (!p) return null
+    return `${p.jersey_number != null ? `${p.jersey_number}. ` : ''}${p.full_name}`
+  }
+  const teamName = (teamId: string | null | undefined) => {
+    if (teamId === archive.homeTeam?.id) return archive.homeTeam?.name || 'Home'
+    if (teamId === archive.awayTeam?.id) return archive.awayTeam?.name || 'Away'
+    return ''
+  }
+  const clock = (s: number) => `${Math.floor((s || 0) / 60)}'`
+  const childOf = (e: any, key: string) => {
+    const c = e[key]
+    return Array.isArray(c) ? c[0] : c || null
+  }
+
+  const events: any[] = (Array.isArray(archive.events) ? archive.events : []).filter((e) => !e.is_reversed)
+  const foulCount = events.filter((e) => e.event_type === 'FOUL').length
+  const lineoutCount = events.filter((e) => e.event_type === 'LINEOUT').length
+
+  type Row = { key: string; clock: string; icon: string; label: string }
+  const rows: Row[] = []
+  for (const e of events) {
+    const at = clock(e.game_clock_seconds)
+    if (e.event_type === 'TRY') {
+      const t = childOf(e, 'tries')
+      if (!t) continue
+      const scorer = playerOf(t.player_id)
+      rows.push({
+        key: e.id, clock: at, icon: '🏉',
+        label: `${t.points === 7 ? 'Penalty try' : 'Try'} — ${teamName(t.team_id)}${scorer ? `, ${scorer}` : ''} (+${t.points})`,
+      })
+    } else if (e.event_type === 'CONVERSION') {
+      const c = childOf(e, 'conversions')
+      if (!c || !c.result || c.result === 'TIMED_OUT') continue
+      const kicker = playerOf(c.kicker_player_id)
+      rows.push({
+        key: e.id, clock: at, icon: c.result === 'SUCCESSFUL' ? '✅' : '❌',
+        label: `Conversion ${c.result === 'SUCCESSFUL' ? 'good (+2)' : 'missed'} — ${teamName(c.team_id)}${kicker ? `, ${kicker}` : ''}`,
+      })
+    } else if (e.event_type === 'PENALTY') {
+      const p = childOf(e, 'penalties')
+      if (!p || !p.result || p.result === 'TIMED_OUT') continue
+      const kicker = playerOf(p.kicker_player_id)
+      rows.push({
+        key: e.id, clock: at, icon: p.result === 'SUCCESSFUL' ? '✅' : '❌',
+        label: `Penalty goal ${p.result === 'SUCCESSFUL' ? 'good (+3)' : 'missed'} — ${teamName(p.team_id)}${kicker ? `, ${kicker}` : ''}`,
+      })
+    } else if (e.event_type === 'DROP_GOAL') {
+      const d = childOf(e, 'drop_goals')
+      if (!d) continue
+      const kicker = playerOf(d.player_id)
+      rows.push({ key: e.id, clock: at, icon: '🎯', label: `Drop goal (+3) — ${teamName(d.team_id)}${kicker ? `, ${kicker}` : ''}` })
+    } else if (e.event_type === 'CARD') {
+      const c = childOf(e, 'cards')
+      if (!c) continue
+      const who = playerOf(c.player_id)
+      rows.push({
+        key: e.id, clock: at, icon: c.card_type === 'RED' ? '🟥' : '🟨',
+        label: `${c.card_type === 'RED' ? 'Red' : 'Yellow'} card — ${teamName(c.team_id)}${who ? `, ${who}` : ''}`,
+      })
+    } else if (e.event_type === 'SUBSTITUTION') {
+      const s = childOf(e, 'substitutions')
+      if (!s || s.status !== 'APPROVED') continue
+      const off = playerOf(s.player_off_id)
+      const on = playerOf(s.player_on_id)
+      rows.push({ key: e.id, clock: at, icon: '🔁', label: `Substitution — ${teamName(s.team_id)}: ${off || '?'} off, ${on || '?'} on` })
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-purple-100 bg-purple-50/40 p-3" data-testid="match-archive">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-semibold text-gray-900">
+          {archive.homeTeam?.name || 'Home'} <span className="rounded bg-gray-900 px-2 py-0.5 text-white">{archive.finalScore?.home ?? '–'} — {archive.finalScore?.away ?? '–'}</span> {archive.awayTeam?.name || 'Away'}
+        </div>
+        <div className="flex gap-2 text-[11px] text-gray-600">
+          <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-gray-200">{foulCount} fouls</span>
+          <span className="rounded-full bg-white px-2 py-0.5 ring-1 ring-gray-200">{lineoutCount} lineouts</span>
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <p className="mt-2 text-xs text-gray-500">No scoring plays, cards or substitutions were logged.</p>
+      ) : (
+        <ol className="mt-2 space-y-1">
+          {rows.map((r) => (
+            <li key={r.key} className="flex items-baseline gap-2 text-xs text-gray-800">
+              <span className="w-9 shrink-0 font-mono text-gray-500">{r.clock}</span>
+              <span aria-hidden>{r.icon}</span>
+              <span>{r.label}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      <p className="mt-2 text-[10px] text-gray-400">Pushed by the Rugby Assistant match-day app at full-time.</p>
+    </div>
+  )
 }

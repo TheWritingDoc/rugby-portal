@@ -1783,10 +1783,11 @@ app.post('/api/assistant/archive', async (req, res) => {
   if (!jobId || !gameId) return res.status(400).json({ error: 'job_and_game_required' })
   const ts = Date.now()
   try {
+    const linkedFixtureId = String(body.payload?.game?.portalGameId || '') || null
     await dbRunP(
-      `INSERT INTO assistant_archives (id, gameId, jobType, data, ts) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (id) DO UPDATE SET data = excluded.data, ts = excluded.ts`,
-      [jobId, gameId, String(body.jobType || 'PORTAL_ARCHIVE'), JSON.stringify(body.payload ?? {}), ts]
+      `INSERT INTO assistant_archives (id, gameId, fixtureId, jobType, data, ts) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET fixtureId = excluded.fixtureId, data = excluded.data, ts = excluded.ts`,
+      [jobId, gameId, linkedFixtureId, String(body.jobType || 'PORTAL_ARCHIVE'), JSON.stringify(body.payload ?? {}), ts]
     )
     writeAudit('AssistantApp', 'assistant_archives', 'ingest', null, { jobId, gameId, jobType: body.jobType })
 
@@ -3138,6 +3139,27 @@ function dbGetP(sql, params) {
 function dbRunP(sql, params) {
   return new Promise((resolve, reject) => db.run(sql, params, function (e) { e ? reject(e) : resolve(this) }))
 }
+
+// Full match archive for a fixture (pushed by the Assistant at full-time).
+// Visible to whoever can see the fixture; latest archive wins if replayed.
+app.get('/api/fixtures/:id/archive', async (req, res) => {
+  const user = req.user || {}
+  if (!user.role) return res.status(403).json({ error: 'forbidden' })
+  try {
+    const f = await dbGetP('SELECT * FROM fixtures WHERE id = ?', [String(req.params.id)])
+    if (!f || !canSeeFixture(user, f)) return res.status(404).json({ error: 'not_found' })
+    const row = await dbGetP(
+      'SELECT * FROM assistant_archives WHERE fixtureId = ? ORDER BY ts DESC LIMIT 1',
+      [String(f.id)]
+    )
+    if (!row) return res.status(404).json({ error: 'no_archive' })
+    let payload = {}
+    try { payload = JSON.parse(row.data || '{}') } catch {}
+    res.json({ receivedAt: Number(row.ts), archive: payload })
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) })
+  }
+})
 
 function fixtureOut(row) {
   if (!row) return row

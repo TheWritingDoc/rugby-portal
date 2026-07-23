@@ -204,8 +204,10 @@ async function initSchema() {
       submittedBy TEXT, submittedAt BIGINT, data TEXT)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS ux_team_sheets_fixture_school ON team_sheets(fixtureId, schoolId)`,
     `CREATE TABLE IF NOT EXISTS assistant_archives (
-      id TEXT PRIMARY KEY, gameId TEXT NOT NULL, jobType TEXT, data TEXT, ts BIGINT)`,
+      id TEXT PRIMARY KEY, gameId TEXT NOT NULL, fixtureId TEXT, jobType TEXT, data TEXT, ts BIGINT)`,
+    `ALTER TABLE assistant_archives ADD COLUMN IF NOT EXISTS fixtureId TEXT`,
     `CREATE INDEX IF NOT EXISTS ix_assistant_archives_game ON assistant_archives(gameId)`,
+    `CREATE INDEX IF NOT EXISTS ix_assistant_archives_fixture ON assistant_archives(fixtureId)`,
     `ALTER TABLE assistant_archives ENABLE ROW LEVEL SECURITY`,
     `CREATE TABLE IF NOT EXISTS approvals (
       id TEXT PRIMARY KEY, entityType TEXT NOT NULL, entityId TEXT NOT NULL,
